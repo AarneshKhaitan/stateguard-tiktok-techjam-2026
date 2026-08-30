@@ -122,6 +122,12 @@ export async function createApp(
     return { validation: service.getValidation(id) };
   });
 
+  app.post("/api/agents/:id/promote", async (request) => {
+    const { id } = agentIdParams.parse(request.params);
+    const body = z.object({ validationId: z.string().uuid().optional() }).parse(request.body ?? {});
+    return { agent: await service.promote(id, body.validationId) };
+  });
+
   app.delete("/api/agents/:id", async (request) => {
     const { id } = agentIdParams.parse(request.params);
     return service.deleteAgent(id);

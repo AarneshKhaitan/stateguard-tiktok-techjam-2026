@@ -53,6 +53,8 @@ export default function App() {
   const [validation, setValidation] = useState<ValidationRecord | null>(null);
   const [validationTask, setValidationTask] = useState("Remove obsolete documentation");
   const [validating, setValidating] = useState(false);
+  const [promoting, setPromoting] = useState(false);
+  const [promotionMessage, setPromotionMessage] = useState<string | null>(null);
   const [policyForm, setPolicyForm] = useState({ protectedPaths: "config/production.json", verificationCommand: "exit 0", changeBudget: 20 });
   const messageEnd = useRef<HTMLDivElement>(null);
   const selectedIdRef = useRef<string | null>(null);
@@ -199,6 +201,14 @@ export default function App() {
     }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setValidating(false); }
+  };
+
+  const promoteCandidate = async () => {
+    if (!selected || !validation || validation.status !== "certified") return;
+    setPromoting(true); setPromotionMessage(null); setError(null);
+    try { await api.promote(selected.id, validation.id); setPromotionMessage("Promoted: active release changed; generation and Codex thread were preserved/reset by policy."); await refreshAgents(); const result = await api.releases(selected.id); setReleases(result.releases); }
+    catch (reason) { setPromotionMessage(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setPromoting(false); }
   };
 
   const toggleAgent = async () => {
@@ -520,7 +530,8 @@ export default function App() {
             <section className="release-panel">
               <div className="playground-topbar"><div><span className="eyebrow">StateGuard control plane</span><h2>Releases and validation</h2></div><span className="session-info">ACTIVE {selected.activeGenerationId}</span></div>
               <div className="release-summary"><span>Active release: v{releases.find((item) => item.id === selected.activeReleaseId)?.version ?? "—"} · {selected.activeReleaseId.slice(0, 8)}</span><span>Candidate: {selected.candidateReleaseId ? "v" + (releases.find((item) => item.id === selected.candidateReleaseId)?.version ?? "—") : "none"}</span><span>Protected: {selected.policy.protectedPaths.join(", ") || "none"}</span></div>
-              <div className="validation-controls"><input value={validationTask} onChange={(event) => setValidationTask(event.target.value)} placeholder="Fixed validation task" /><button className="button button-primary" onClick={validateCandidate} disabled={validating || !selected.candidateReleaseId}>{validating ? <Spinner /> : "Validate candidate"}</button></div>
+              <div className="validation-controls"><input value={validationTask} onChange={(event) => setValidationTask(event.target.value)} placeholder="Fixed validation task" /><button className="button button-primary" onClick={validateCandidate} disabled={validating || !selected.candidateReleaseId}>{validating ? <Spinner /> : "Validate candidate"}</button><button className="button button-primary" onClick={promoteCandidate} disabled={promoting || validation?.status !== "certified"}>{promoting ? <Spinner /> : "Promote certified"}</button></div>
+              {promotionMessage && <div className="promotion-message">{promotionMessage}</div>}
               {validation && <div className={"validation-result validation-" + validation.status}><strong>{validation.status.toUpperCase()}</strong><span>Context {validation.context.contextHash.slice(0, 12)}</span>{validation.error && <span>Runtime failure: {validation.error}</span>}{validation.differentialDeletions.length > 0 && <span>Differential block: new deletions — {validation.differentialDeletions.join(", ")}</span>}{validation.status === "baseline_unhealthy" && <span>The active release failed its own gates on this task — the candidate was not judged against it.</span>}{validation.baselineGateFailures.map((failure, index) => <span key={"b" + failure.code + index}>Active release gate {failure.code}: {failure.reason}</span>)}{validation.candidateGateFailures.map((failure, index) => <span key={"c" + failure.code + index}>Candidate gate {failure.code}: {failure.reason}</span>)}{validation.candidateDiff.changes.length > 0 && <span>Candidate diff: {validation.candidateDiff.changes.map((change) => change.kind + " " + change.path).join(", ")}</span>}</div>}
             </section>
 

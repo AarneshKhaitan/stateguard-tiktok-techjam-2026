@@ -245,6 +245,42 @@ export class AgentService {
     return validation;
   }
 
+  async promote(id: string, validationId?: string): Promise<Agent> {
+    this.getAgent(id);
+    return this.store.mutate((database) => {
+      const agent = database.agents.find((item) => item.id === id);
+      if (!agent) throw new HttpError(404, "Agent not found");
+      const validation = database.validations
+        .filter((item) => item.agentId === id && (!validationId || item.id === validationId))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      if (!validation) throw new HttpError(409, "Promotion refused: no validation exists");
+      if (validation.status !== "certified") throw new HttpError(409, `Promotion refused: validation is ${validation.status}, not CERTIFIED`);
+      const active = database.releases.find((release) => release.id === agent.activeReleaseId);
+      const candidate = database.releases.find((release) => release.id === validation.candidateReleaseId);
+      if (!active || !candidate || agent.candidateReleaseId !== candidate.id) throw new HttpError(409, "Promotion refused: candidate release is no longer current; revalidation required");
+      const actual = createValidationContext({
+        baselineReleaseHash: active.releaseHash, candidateReleaseHash: candidate.releaseHash,
+        generationId: agent.activeGenerationId, taskHash: this.hashTask(validation.task), policyHash: agent.policy.policyHash,
+        arkModel: this.config.arkModel, codexVersion: this.config.codexVersion,
+      });
+      const fields: Array<keyof Omit<typeof actual, "contextHash">> = ["baselineReleaseHash", "candidateReleaseHash", "generationId", "taskHash", "policyHash", "arkModel", "codexVersion"];
+      for (const field of fields) {
+        if (actual[field] !== validation.context[field]) {
+          throw new HttpError(409, `Promotion refused: ${field} drifted; revalidation required (${validation.context[field]} -> ${actual[field]})`);
+        }
+      }
+      const previousActive = database.releases.find((release) => release.id === agent.activeReleaseId);
+      if (previousActive) previousActive.status = "retired";
+      candidate.status = "active";
+      agent.activeReleaseId = candidate.id;
+      agent.candidateReleaseId = null;
+      agent.codexThreadId = null;
+      agent.name = candidate.name; agent.description = candidate.description; agent.instructions = candidate.instructions;
+      agent.updatedAt = now();
+      return structuredClone(agent);
+    });
+  }
+
   async startAgent(id: string): Promise<Agent> {
     return this.setStatus(id, "ready");
   }

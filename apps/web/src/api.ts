@@ -82,5 +82,6 @@ export const api = {
   validate: (id: string, task: string) => request<{ validation: ValidationRecord }>("/api/agents/" + id + "/validations", { method: "POST", body: JSON.stringify({ task }) }),
   validations: (id: string) => request<{ validations: ValidationRecord[] }>("/api/agents/" + id + "/validations"),
   validation: (id: string) => request<{ validation: ValidationRecord }>("/api/validations/" + id),
+  promote: (id: string, validationId: string) => request<{ agent: Agent }>("/api/agents/" + id + "/promote", { method: "POST", body: JSON.stringify({ validationId }) }),
   run: (id: string) => request<{ run: AgentRun }>("/api/runs/" + id),
 };
