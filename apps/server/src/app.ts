@@ -22,6 +22,12 @@ const updateAgentBody = createAgentBody.partial().refine(
 const messageBody = z.object({
   content: z.string().trim().min(1).max(50_000),
 });
+const policyBody = z.object({
+  protectedPaths: z.array(z.string().max(500)).max(100),
+  verificationCommand: z.string().trim().min(1).max(2_000),
+  changeBudget: z.number().int().min(0).max(100_000),
+});
+const validationBody = z.object({ task: z.string().trim().min(1).max(50_000) });
 
 export async function createApp(
   config: AppConfig,
@@ -89,6 +95,31 @@ export async function createApp(
     const { id } = agentIdParams.parse(request.params);
     const body = updateAgentBody.parse(request.body);
     return { agent: await service.updateAgent(id, body) };
+  });
+
+  app.get("/api/agents/:id/releases", async (request) => {
+    const { id } = agentIdParams.parse(request.params);
+    return { releases: service.getReleases(id) };
+  });
+
+  app.patch("/api/agents/:id/policy", async (request) => {
+    const { id } = agentIdParams.parse(request.params);
+    return { agent: await service.updatePolicy(id, policyBody.parse(request.body)) };
+  });
+
+  app.get("/api/agents/:id/validations", async (request) => {
+    const { id } = agentIdParams.parse(request.params);
+    return { validations: service.getValidations(id) };
+  });
+
+  app.post("/api/agents/:id/validations", async (request, reply) => {
+    const { id } = agentIdParams.parse(request.params);
+    return reply.code(202).send({ validation: await service.validateCandidate(id, validationBody.parse(request.body).task) });
+  });
+
+  app.get("/api/validations/:id", async (request) => {
+    const { id } = runIdParams.parse(request.params);
+    return { validation: service.getValidation(id) };
   });
 
   app.delete("/api/agents/:id", async (request) => {

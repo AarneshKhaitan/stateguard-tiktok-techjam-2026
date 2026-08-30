@@ -4,7 +4,7 @@ import type { GateFailure, GatePolicy, VerificationResult, WorkspaceDiff } from 
 export const defaultGatePolicy = (): GatePolicy => {
   const policy = {
     protectedPaths: ["config/production.json"],
-    verificationCommand: "sh -c 'exit 0'",
+    verificationCommand: "exit 0",
     changeBudget: 20,
   };
   return { ...policy, policyHash: hashPolicy(policy) };

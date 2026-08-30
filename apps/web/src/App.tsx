@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, setAuthToken } from "./api";
-import type { Agent, AgentRun, Message, SystemInfo } from "./types";
+import type { Agent, AgentRelease, AgentRun, Message, SystemInfo, ValidationRecord } from "./types";
 
 const starterPrompts = [
   "Create a small TypeScript CLI that prints a weather summary from sample JSON.",
@@ -49,6 +49,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [authRequired, setAuthRequired] = useState<boolean | null>(null);
   const [authInput, setAuthInput] = useState("");
+  const [releases, setReleases] = useState<AgentRelease[]>([]);
+  const [validation, setValidation] = useState<ValidationRecord | null>(null);
+  const [validationTask, setValidationTask] = useState("Remove obsolete documentation");
+  const [validating, setValidating] = useState(false);
+  const [policyForm, setPolicyForm] = useState({ protectedPaths: "config/production.json", verificationCommand: "exit 0", changeBudget: 20 });
   const messageEnd = useRef<HTMLDivElement>(null);
   const selectedIdRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
@@ -120,6 +125,15 @@ export default function App() {
   }, [refreshMessages, selectedId]);
 
   useEffect(() => {
+    if (!selected) return;
+    void Promise.all([api.releases(selected.id), api.validations(selected.id)]).then(([releaseResult, validationResult]) => {
+      setReleases(releaseResult.releases);
+      setValidation(validationResult.validations[0] ?? null);
+      setPolicyForm({ protectedPaths: selected.policy.protectedPaths.join("\n"), verificationCommand: selected.policy.verificationCommand, changeBudget: selected.policy.changeBudget });
+    }).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
+  }, [selected]);
+
+  useEffect(() => {
     if (selected) {
       setForm({
         name: selected.name,
@@ -157,6 +171,7 @@ export default function App() {
     setError(null);
     try {
       await api.updateAgent(selected.id, form);
+      await api.updatePolicy(selected.id, { ...policyForm, protectedPaths: policyForm.protectedPaths.split(/\r?\n|,/).map((item) => item.trim()).filter(Boolean) });
       await refreshAgents();
       setShowSettings(false);
     } catch (reason) {
@@ -164,6 +179,14 @@ export default function App() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const validateCandidate = async () => {
+    if (!selected || !validationTask.trim()) return;
+    setValidating(true); setError(null);
+    try { const result = await api.validate(selected.id, validationTask); setValidation(result.validation); await refreshAgents(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setValidating(false); }
   };
 
   const toggleAgent = async () => {
@@ -468,6 +491,11 @@ export default function App() {
                     maxLength={10_000}
                   />
                 </label>
+                <div className="form-grid">
+                  <label>Protected paths<textarea rows={3} value={policyForm.protectedPaths} onChange={(event) => setPolicyForm({ ...policyForm, protectedPaths: event.target.value })} /></label>
+                  <label>Trusted verification command<input value={policyForm.verificationCommand} onChange={(event) => setPolicyForm({ ...policyForm, verificationCommand: event.target.value })} /><span className="field-hint">Server-side command; never read from the workspace.</span></label>
+                </div>
+                <label>Absolute change budget<input type="number" min={0} value={policyForm.changeBudget} onChange={(event) => setPolicyForm({ ...policyForm, changeBudget: Number(event.target.value) })} /></label>
                 <div className="panel-footer">
                   <code>{selected.workspacePath}</code>
                   <button className="button button-primary" disabled={busy}>
@@ -476,6 +504,13 @@ export default function App() {
                 </div>
               </form>
             )}
+
+            <section className="release-panel">
+              <div className="playground-topbar"><div><span className="eyebrow">StateGuard control plane</span><h2>Releases and validation</h2></div><span className="session-info">ACTIVE {selected.activeGenerationId}</span></div>
+              <div className="release-summary"><span>Active release: v{releases.find((item) => item.id === selected.activeReleaseId)?.version ?? "—"} · {selected.activeReleaseId.slice(0, 8)}</span><span>Candidate: {selected.candidateReleaseId ? "v" + (releases.find((item) => item.id === selected.candidateReleaseId)?.version ?? "—") : "none"}</span><span>Protected: {selected.policy.protectedPaths.join(", ") || "none"}</span></div>
+              <div className="validation-controls"><input value={validationTask} onChange={(event) => setValidationTask(event.target.value)} placeholder="Fixed validation task" /><button className="button button-primary" onClick={validateCandidate} disabled={validating || !selected.candidateReleaseId}>{validating ? <Spinner /> : "Validate candidate"}</button></div>
+              {validation && <div className={"validation-result validation-" + validation.status}><strong>{validation.status.toUpperCase()}</strong><span>Context {validation.context.contextHash.slice(0, 12)}</span>{validation.error && <span>Runtime failure: {validation.error}</span>}{validation.differentialDeletions.length > 0 && <span>Differential block: new deletions — {validation.differentialDeletions.join(", ")}</span>}{[...validation.baselineGateFailures, ...validation.candidateGateFailures].map((failure, index) => <span key={failure.code + index}>Policy gate {failure.code}: {failure.reason}</span>)}{validation.candidateDiff.changes.length > 0 && <span>Candidate diff: {validation.candidateDiff.changes.map((change) => change.kind + " " + change.path).join(", ")}</span>}</div>}
+            </section>
 
             <section className="playground">
               <div className="playground-topbar">
@@ -534,8 +569,9 @@ export default function App() {
                 )}
                 {activeRun?.status === "failed" && (
                   <article className="run-error">
-                    <strong>Run failed</strong>
+                    <strong>{activeRun.gateFailures && activeRun.gateFailures.length > 0 ? "Policy blocked this Run" : "Run crashed"}</strong>
                     <span>{activeRun.error}</span>
+                    {activeRun.gateFailures?.map((failure) => <span key={failure.code}>Gate {failure.code}: {failure.reason}</span>)}
                   </article>
                 )}
                 <div ref={messageEnd} />

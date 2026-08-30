@@ -1096,3 +1096,11 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 }
+ .release-panel { margin: 18px 0; padding: 22px; border: 1px solid var(--line, #d9dce3); border-radius: 16px; background: var(--surface, #fff); }
+.release-summary, .validation-controls, .validation-result { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+.release-summary { color: #5f6470; font-size: 13px; }
+.validation-controls input { flex: 1; min-width: 220px; }
+.validation-result { flex-direction: column; align-items: flex-start; padding: 14px; border-radius: 10px; background: #f4f5f7; }
+.validation-certified { color: #176b45; background: #e8f7ef; }
+.validation-blocked, .validation-failed { color: #9c2d28; background: #fff0ef; }
+.field-hint { display: block; font-size: 11px; color: #777; margin-top: 4px; }

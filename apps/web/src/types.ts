@@ -9,10 +9,19 @@ export interface Agent {
   status: AgentStatus;
   workspacePath: string;
   codexThreadId: string | null;
+  activeGenerationId: string;
+  activeReleaseId: string;
+  candidateReleaseId: string | null;
+  policy: GatePolicy;
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
 }
+
+export interface GatePolicy { protectedPaths: string[]; verificationCommand: string; changeBudget: number; policyHash: string; }
+export interface AgentRelease { id: string; agentId: string; version: number; name: string; description: string; instructions: string; releaseHash: string; status: "active" | "candidate" | "retired"; parentReleaseId: string | null; createdAt: string; }
+export interface FileChange { path: string; kind: "added" | "modified" | "deleted"; }
+export interface ValidationRecord { id: string; status: "running" | "certified" | "blocked" | "failed"; task: string; candidateReleaseId: string; baselineDiff: { changes: FileChange[] }; candidateDiff: { changes: FileChange[] }; baselineGateFailures: { code: string; reason: string }[]; candidateGateFailures: { code: string; reason: string }[]; differentialDeletions: string[]; context: { contextHash: string }; error: string | null; }
 
 export interface Message {
   id: string;
@@ -36,6 +45,7 @@ export interface AgentRun {
     outputTokens?: number;
   } | null;
   createdAt: string;
+  gateFailures?: { code: string; reason: string }[] | null;
 }
 
 export interface SystemInfo {

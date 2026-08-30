@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Agent, GenerationId } from "./types.js";
+import type { Agent, AgentRelease, GenerationId } from "./types.js";
 
 const initialGeneration: GenerationId = "gen_0001";
 
@@ -39,16 +39,19 @@ export class WorkspaceManager {
     }
   }
 
-  async prepareStaging(agent: Agent, runId: string): Promise<{ stagingPath: string; basePath: string; agentsMdHash: string }> {
-    const basePath = this.generationPath(agent);
+  async prepareStaging(agent: Agent, runId: string, instructionsSource: Pick<AgentRelease, "name" | "description" | "instructions"> | Agent = agent): Promise<{ stagingPath: string; basePath: string; agentsMdHash: string }> {
+    return this.prepareStagingFrom(agent, runId, this.generationPath(agent), instructionsSource);
+  }
+
+  async prepareStagingFrom(agent: Agent, runId: string, basePath: string, instructionsSource: Pick<AgentRelease, "name" | "description" | "instructions"> | Agent): Promise<{ stagingPath: string; basePath: string; agentsMdHash: string }> {
     const stagingPath = path.join(this.stagingRoot(agent), "tx_" + runId);
     await mkdir(this.stagingRoot(agent), { recursive: true });
     await cp(basePath, stagingPath, { recursive: true, force: false });
-    const agentsMdHash = await this.synthesizeAgentsMd(stagingPath, agent);
+    const agentsMdHash = await this.synthesizeAgentsMd(stagingPath, instructionsSource);
     return { stagingPath, basePath, agentsMdHash };
   }
 
-  async synthesizeAgentsMd(targetDir: string, agent: Agent): Promise<string> {
+  async synthesizeAgentsMd(targetDir: string, agent: Pick<Agent, "name" | "description" | "instructions">): Promise<string> {
     const content = this.instructionsContent(agent);
     await writeFile(path.join(targetDir, "AGENTS.md"), content, "utf8");
     return createHash("sha256").update(content).digest("hex");
@@ -91,7 +94,7 @@ export class WorkspaceManager {
     return destination;
   }
 
-  private instructionsContent(agent: Agent): string {
+  private instructionsContent(agent: Pick<Agent, "name" | "description" | "instructions">): string {
     return [
       "# Platform-managed Agent instructions", "", "You are the coding Agent named " + agent.name + ".",
       agent.description ? "Purpose: " + agent.description : "", "", "## Instructions", "",

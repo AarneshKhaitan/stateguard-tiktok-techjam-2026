@@ -1,20 +1,27 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { AppConfig } from "./config.js";
 import { isArkConfigured } from "./config.js";
 import { HttpError, RunCancelledError } from "./errors.js";
 import { JsonStore } from "./store.js";
 import type {
   Agent,
+  AgentRelease,
   AgentRun,
   AgentRunner,
   CreateAgentInput,
   Message,
   UpdateAgentInput,
+  GatePolicy,
+  ValidationRecord,
+  WorkspaceDiff,
   VerificationRunner,
 } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
 import { diffTrees } from "./diff.js";
-import { defaultGatePolicy, evaluateAbsoluteGates } from "./policy.js";
+import { defaultGatePolicy, evaluateAbsoluteGates, hashPolicy } from "./policy.js";
+import { createRelease } from "./release.js";
+import { newDestructiveDeletions } from "./differential.js";
+import { createValidationContext } from "./validation-context.js";
 
 const now = () => new Date().toISOString();
 
@@ -69,14 +76,15 @@ export class AgentService {
   async createAgent(input: CreateAgentInput): Promise<Agent> {
     const timestamp = now();
     const id = randomUUID();
+    const fields = { name: input.name.trim(), description: input.description?.trim() ?? "", instructions: input.instructions?.trim() ?? "" };
+    const release = createRelease(id, fields, 1, "active", null);
     const agent: Agent = {
-      id,
-      name: input.name.trim(),
-      description: input.description?.trim() ?? "",
-      instructions: input.instructions?.trim() ?? "",
+      id, ...fields,
       status: "ready",
       workspacePath: this.workspaces.workspacePath(id),
       activeGenerationId: "gen_0001",
+      activeReleaseId: release.id,
+      candidateReleaseId: null,
       policy: defaultGatePolicy(),
       codexThreadId: null,
       lastError: null,
@@ -84,7 +92,7 @@ export class AgentService {
       updatedAt: timestamp,
     };
     await this.workspaces.create(agent);
-    await this.store.mutate((database) => database.agents.push(agent));
+    await this.store.mutate((database) => { database.agents.push(agent); database.releases.push(release); });
     return agent;
   }
 
@@ -101,9 +109,18 @@ export class AgentService {
       if (agent.status === "busy") {
         throw new HttpError(409, "Stop the active run before editing this Agent");
       }
-      if (input.name !== undefined) agent.name = input.name.trim();
-      if (input.description !== undefined) agent.description = input.description.trim();
-      if (input.instructions !== undefined) agent.instructions = input.instructions.trim();
+      const previous = database.releases.find((release) => release.id === (agent.candidateReleaseId ?? agent.activeReleaseId));
+      const fields = {
+        name: input.name?.trim() ?? previous?.name ?? agent.name,
+        description: input.description?.trim() ?? previous?.description ?? agent.description,
+        instructions: input.instructions?.trim() ?? previous?.instructions ?? agent.instructions,
+      };
+      const version = Math.max(0, ...database.releases.filter((release) => release.agentId === id).map((release) => release.version)) + 1;
+      for (const release of database.releases) if (release.id === agent.candidateReleaseId) release.status = "retired";
+      const candidate = createRelease(id, fields, version, "candidate", previous?.id ?? null);
+      database.releases.push(candidate);
+      agent.name = fields.name; agent.description = fields.description; agent.instructions = fields.instructions;
+      agent.candidateReleaseId = candidate.id;
       agent.lastError = null;
       agent.updatedAt = now();
       return structuredClone(agent);
@@ -119,8 +136,103 @@ export class AgentService {
       database.agents = database.agents.filter((item) => item.id !== id);
       database.messages = database.messages.filter((item) => item.agentId !== id);
       database.runs = database.runs.filter((item) => item.agentId !== id);
+      database.releases = database.releases.filter((item) => item.agentId !== id);
+      database.validations = database.validations.filter((item) => item.agentId !== id);
     });
     return { archivedWorkspace };
+  }
+
+  getReleases(agentId: string): AgentRelease[] {
+    this.getAgent(agentId);
+    return this.store.snapshot().releases.filter((release) => release.agentId === agentId).sort((a, b) => b.version - a.version);
+  }
+
+  async updatePolicy(id: string, input: Omit<GatePolicy, "policyHash">): Promise<Agent> {
+    return this.store.mutate((database) => {
+      const agent = database.agents.find((item) => item.id === id);
+      if (!agent) throw new HttpError(404, "Agent not found");
+      if (agent.status === "busy") throw new HttpError(409, "Stop the active run before changing policy");
+      const policy = { ...input, protectedPaths: input.protectedPaths.map((item) => item.trim()).filter(Boolean) };
+      agent.policy = { ...policy, policyHash: hashPolicy(policy) };
+      agent.updatedAt = now();
+      return structuredClone(agent);
+    });
+  }
+
+  async validateCandidate(agentId: string, task: string): Promise<ValidationRecord> {
+    if (!task.trim()) throw new HttpError(400, "Validation task is required");
+    const agent = this.getAgent(agentId);
+    if (agent.status === "busy") throw new HttpError(409, "Stop the active run before validating");
+    const database = this.store.snapshot();
+    const candidate = database.releases.find((release) => release.id === agent.candidateReleaseId);
+    const baseline = database.releases.find((release) => release.id === agent.activeReleaseId);
+    if (!candidate || !baseline) throw new HttpError(409, "A candidate release is required");
+    const validation: ValidationRecord = {
+      id: randomUUID(), agentId, baselineRunId: randomUUID(), candidateRunId: randomUUID(), candidateReleaseId: candidate.id,
+      status: "running", task: task.trim(),
+      context: createValidationContext({
+        baselineReleaseHash: baseline.releaseHash, candidateReleaseHash: candidate.releaseHash,
+        generationId: agent.activeGenerationId, taskHash: this.hashTask(task.trim()), policyHash: agent.policy.policyHash,
+        arkModel: this.config.arkModel, codexVersion: this.config.codexVersion,
+      }),
+      baselineDiff: this.emptyDiff(agent.activeGenerationId), candidateDiff: this.emptyDiff(agent.activeGenerationId),
+      baselineGateFailures: [], candidateGateFailures: [], differentialDeletions: [], error: null,
+      createdAt: now(), completedAt: null,
+    };
+    await this.store.mutate((db) => { db.validations.push(validation); const stored = db.agents.find((item) => item.id === agentId); if (stored) { stored.status = "busy"; stored.updatedAt = now(); } });
+    const execution = this.executeValidation(agent, baseline, candidate, validation);
+    this.activeExecutions.set(agentId, execution);
+    await execution;
+    return this.getValidation(validation.id);
+  }
+
+  private async executeValidation(agent: Agent, baseline: AgentRelease, candidate: AgentRelease, validation: ValidationRecord): Promise<void> {
+    try {
+      const basePath = this.workspaces.generationPath(agent);
+      const first = await this.runValidationExecution(agent, baseline, validation.baselineRunId, validation.task, basePath);
+      const second = await this.runValidationExecution(agent, candidate, validation.candidateRunId, validation.task, basePath);
+      const differentialDeletions = newDestructiveDeletions(first.diff, second.diff);
+      const blocked = first.gates.failures.length > 0 || second.gates.failures.length > 0 || differentialDeletions.length > 0;
+      await this.store.mutate((db) => {
+        const record = db.validations.find((item) => item.id === validation.id); const storedAgent = db.agents.find((item) => item.id === agent.id);
+        if (!record || !storedAgent) return;
+        record.status = blocked ? "blocked" : "certified"; record.baselineDiff = first.diff; record.candidateDiff = second.diff;
+        record.baselineGateFailures = first.gates.failures; record.candidateGateFailures = second.gates.failures; record.differentialDeletions = differentialDeletions; record.completedAt = now();
+        storedAgent.status = "ready"; storedAgent.updatedAt = now();
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await this.store.mutate((db) => { const record = db.validations.find((item) => item.id === validation.id); const storedAgent = db.agents.find((item) => item.id === agent.id); if (record) { record.status = "failed"; record.error = message; record.completedAt = now(); } if (storedAgent) { storedAgent.status = "error"; storedAgent.lastError = message; storedAgent.updatedAt = now(); } });
+    } finally {
+      if (this.activeExecutions.get(agent.id) === this.activeExecutions.get(agent.id)) this.activeExecutions.delete(agent.id);
+    }
+  }
+
+  private async runValidationExecution(agent: Agent, release: AgentRelease, runId: string, task: string, basePath: string): Promise<{ diff: WorkspaceDiff; gates: ReturnType<typeof evaluateAbsoluteGates> }> {
+    const { stagingPath } = await this.workspaces.prepareStagingFrom(agent, runId, basePath, release);
+    try {
+      const result = await this.runner.run({ agentId: agent.id, workspacePath: stagingPath, prompt: task, threadId: null });
+      await this.workspaces.removeAgentsMd(stagingPath);
+      const diff = await diffTrees(basePath, stagingPath, agent.activeGenerationId);
+      let verification;
+      try { verification = await this.verifier.run({ workspacePath: stagingPath, command: agent.policy.verificationCommand, agentId: agent.id, runId }); }
+      catch (error) { verification = { passed: false, output: error instanceof Error ? error.message : String(error), exitCode: null }; }
+      return { diff, gates: evaluateAbsoluteGates(diff, agent.policy, verification) };
+    } finally { await this.workspaces.removeStaging(stagingPath); }
+  }
+
+  private hashTask(task: string): string { return createHash("sha256").update(task).digest("hex"); }
+  private emptyDiff(generationId: string): WorkspaceDiff { return { baseGenerationId: generationId, changes: [], addedCount: 0, modifiedCount: 0, deletedCount: 0, isEmpty: true }; }
+
+  getValidations(agentId: string): ValidationRecord[] {
+    this.getAgent(agentId);
+    return this.store.snapshot().validations.filter((item) => item.agentId === agentId).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  getValidation(id: string): ValidationRecord {
+    const validation = this.store.snapshot().validations.find((item) => item.id === id);
+    if (!validation) throw new HttpError(404, "Validation not found");
+    return validation;
   }
 
   async startAgent(id: string): Promise<Agent> {
@@ -252,7 +364,9 @@ export class AgentService {
       if (this.cancellationRequests.has(agentAtStart.id)) {
         throw new RunCancelledError();
       }
-      const { stagingPath, basePath, agentsMdHash } = await this.workspaces.prepareStaging(agentAtStart, run.id);
+      const activeRelease = this.store.snapshot().releases.find((release) => release.id === agentAtStart.activeReleaseId);
+      if (!activeRelease) throw new Error("Active release is missing");
+      const { stagingPath, basePath, agentsMdHash } = await this.workspaces.prepareStaging(agentAtStart, run.id, activeRelease);
       try {
         const result = await this.runner.run({
           agentId: agentAtStart.id,

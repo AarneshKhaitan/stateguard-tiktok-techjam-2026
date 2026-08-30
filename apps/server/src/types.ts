@@ -2,6 +2,8 @@ export type AgentStatus = "ready" | "busy" | "stopped" | "error";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type MessageRole = "user" | "assistant";
 export type GenerationId = string;
+export type ReleaseStatus = "active" | "candidate" | "retired";
+export type ValidationStatus = "running" | "certified" | "blocked" | "failed";
 
 export interface GatePolicy {
   protectedPaths: string[];
@@ -23,11 +25,26 @@ export interface Agent {
   status: AgentStatus;
   workspacePath: string;
   activeGenerationId: GenerationId;
+  activeReleaseId: string;
+  candidateReleaseId: string | null;
   policy: GatePolicy;
   codexThreadId: string | null;
   lastError: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface AgentRelease {
+  id: string;
+  agentId: string;
+  version: number;
+  name: string;
+  description: string;
+  instructions: string;
+  releaseHash: string;
+  status: ReleaseStatus;
+  parentReleaseId: string | null;
+  createdAt: string;
 }
 
 export interface Message {
@@ -60,10 +77,42 @@ export interface AgentRun {
 }
 
 export interface Database {
-  version: 3;
+  version: 4;
   agents: Agent[];
   messages: Message[];
   runs: AgentRun[];
+  releases: AgentRelease[];
+  validations: ValidationRecord[];
+}
+
+export interface ValidationContext {
+  baselineReleaseHash: string;
+  candidateReleaseHash: string;
+  generationId: string;
+  taskHash: string;
+  policyHash: string;
+  arkModel: string;
+  codexVersion: string;
+  contextHash: string;
+}
+
+export interface ValidationRecord {
+  id: string;
+  agentId: string;
+  baselineRunId: string;
+  candidateRunId: string;
+  candidateReleaseId: string;
+  status: ValidationStatus;
+  task: string;
+  context: ValidationContext;
+  baselineDiff: WorkspaceDiff;
+  candidateDiff: WorkspaceDiff;
+  baselineGateFailures: GateFailure[];
+  candidateGateFailures: GateFailure[];
+  differentialDeletions: string[];
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
 }
 
 export interface FileChange {

@@ -1,13 +1,16 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Database } from "./types.js";
+import type { AgentRelease, Database } from "./types.js";
 import { defaultGatePolicy } from "./policy.js";
+import { createRelease } from "./release.js";
 
 const emptyDatabase = (): Database => ({
-  version: 3,
+  version: 4,
   agents: [],
   messages: [],
   runs: [],
+  releases: [],
+  validations: [],
 });
 
 export class JsonStore {
@@ -21,15 +24,24 @@ export class JsonStore {
     try {
       const raw = await readFile(this.filePath, "utf8");
       const parsed = JSON.parse(raw) as Database;
-      if (![1, 2, 3].includes(parsed.version) || !Array.isArray(parsed.agents)) {
+      if (![1, 2, 3, 4].includes(parsed.version) || !Array.isArray(parsed.agents)) {
         throw new Error("Unsupported database format");
       }
+      const legacy = parsed as Database & { releases?: AgentRelease[]; validations?: Database["validations"] };
+      const releases = [...(legacy.releases ?? [])];
+      const agents = parsed.agents.map((agent) => {
+        const activeReleaseId = agent.activeReleaseId ?? `${agent.id}:release:1`;
+        if (!releases.some((release) => release.id === activeReleaseId)) releases.push({ ...createRelease(agent.id, agent, 1, "active", null), id: activeReleaseId });
+        return { ...agent, activeGenerationId: agent.activeGenerationId ?? "gen_0001", policy: agent.policy ?? defaultGatePolicy(), activeReleaseId, candidateReleaseId: agent.candidateReleaseId ?? null };
+      });
       this.data = {
         ...parsed,
-        version: 3,
-        agents: parsed.agents.map((agent) => ({ ...agent, activeGenerationId: agent.activeGenerationId ?? "gen_0001", policy: agent.policy ?? defaultGatePolicy() })),
+        version: 4,
+        agents,
+        releases,
+        validations: legacy.validations ?? [],
       };
-      if (parsed.version !== 3) await this.persist(this.data);
+      if (parsed.version !== 4) await this.persist(this.data);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;

@@ -44,6 +44,7 @@ const envSchema = z.object({
     .optional(),
   ARK_API_KEY: z.string().optional(),
   ARK_MODEL: z.string().optional(),
+  CODEX_VERSION: z.string().default("0.111.0"),
   ARK_BASE_URL: z
     .string()
     .url()
@@ -91,6 +92,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     authToken,
     arkApiKey: env.ARK_API_KEY?.trim() ?? "",
     arkModel: env.ARK_MODEL?.trim() ?? "",
+    codexVersion: env.CODEX_VERSION,
     arkBaseUrl: env.ARK_BASE_URL.replace(/\/+$/, ""),
     nodeEnv: env.NODE_ENV,
   };

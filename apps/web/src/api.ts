@@ -1,4 +1,4 @@
-import type { Agent, AgentRun, Message, SystemInfo } from "./types";
+import type { Agent, AgentRelease, AgentRun, Message, SystemInfo, ValidationRecord } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -76,6 +76,10 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ content }),
       },
-    ),
+  ),
+  releases: (id: string) => request<{ releases: AgentRelease[] }>("/api/agents/" + id + "/releases"),
+  updatePolicy: (id: string, body: { protectedPaths: string[]; verificationCommand: string; changeBudget: number }) => request<{ agent: Agent }>("/api/agents/" + id + "/policy", { method: "PATCH", body: JSON.stringify(body) }),
+  validate: (id: string, task: string) => request<{ validation: ValidationRecord }>("/api/agents/" + id + "/validations", { method: "POST", body: JSON.stringify({ task }) }),
+  validations: (id: string) => request<{ validations: ValidationRecord[] }>("/api/agents/" + id + "/validations"),
   run: (id: string) => request<{ run: AgentRun }>("/api/runs/" + id),
 };
