@@ -1,16 +1,24 @@
-# Volc Agent Launchpad
+# StateGuard
 
-A minimal Agent platform for three-day middleware hackathons. It provides Agent
-CRUD, a browser Playground, persistent workspaces, and Codex CLI backed by the
-Volcengine Ark Responses API.
+StateGuard is agent middleware for TikTok TechJam Track 1. It evaluates what a
+changed Agent actually does to persistent state, not what its instructions say:
+every production Run is transactional, and a release change must earn
+same-state behavioral evidence before promotion.
+
+It is built on the Volc Agent Launchpad starter. The two guarantees are:
+
+1. A failed, cancelled, blocked, or empty Run cannot corrupt the durable
+   workspace; only a verified diff can become a new immutable generation.
+2. A changed Agent cannot reach production without a certified baseline-versus-
+   candidate comparison that is still valid for the current generation and
+   policy.
 
 Run it locally with Docker, Colima, or rootless Podman, or deploy it to
 Volcengine ECS.
 
 > [!WARNING]
-> This is a single-user proof of concept. It intentionally has no identity,
-> tracing, audit, or hardened sandbox middleware. Do not use production data or
-> credentials. See [SECURITY.md](SECURITY.md).
+> This is a single-user hackathon proof of concept. Do not use production data
+> or credentials. See [SECURITY.md](SECURITY.md).
 
 ## Screenshots
 
@@ -24,6 +32,10 @@ Volcengine ECS.
 
 ## Features
 
+- StateGuard transactional generations and release certification
+- Absolute policy gates plus an independent trusted verifier
+- Differential detection of new destructive behavior
+- Compare-and-swap promotion with generation and policy staleness checks
 - React and TypeScript Web UI
 - Agent create, edit, start, stop, delete, and multi-turn chat
 - Fastify control plane with asynchronous Run state
@@ -70,11 +82,14 @@ Skip this step when already working from the repository root.
 ```bash
 ARK_API_KEY=your-ark-api-key \
 ARK_MODEL=ep-your-endpoint-id \
-npm run poc
+bash run-local.sh
 ```
 
 The first run installs Node.js dependencies and builds the Runtime image. The
-script automatically selects Docker, Colima, or Podman.
+script automatically selects Docker, Colima, or Podman. On Windows,
+`run-local.sh` replaces `npm run poc` because the starter's POSIX startup
+script cannot be launched through the Windows npm shell. Run npm commands from
+PowerShell, not Git Bash.
 
 ### 4. Open the browser
 
@@ -214,17 +229,63 @@ See [.env.example](.env.example) for all Runtime and resource-limit options.
 
 ```mermaid
 flowchart LR
-    UI["React Web UI"] --> API["Fastify control plane"]
-    API --> Store["JSON metadata and Agent workspaces"]
-    API --> Runtime{"Runtime provider"}
-    Runtime -->|Local POC| Container["Disposable Docker / Colima / Podman container"]
-    Runtime -->|ECS profile| Codex["Codex CLI in application container"]
-    Container --> Ark["Volcengine Ark Responses API"]
-    Codex --> Ark
+    UI["React UI"] --> API["Fastify API"] --> S["AgentService"]
+    S --> Store["JsonStore\nAgent + policy + releases + validations"]
+    S --> W["WorkspaceManager"]
+    W --> G["ACTIVE generation\nimmutable gen_NNNN"]
+    S --> R["AgentRunner\nworkspacePath seam"]
+    R --> C["staging execution"] --> A["Codex CLI / Ark"]
+    S --> V["trusted verifier"]
+    V --> C
+    S --> D["diff + absolute gates\n+ differential gate"]
+    D --> P["promotion CAS"]
+    P --> Store
 ```
 
-The first turn uses `codex exec`; later turns resume the stored Codex thread.
-Deleting an Agent archives its workspace under `workspaces/.deleted/`.
+The integration seam is the starter's `AgentRunner.run({ agentId,
+workspacePath, prompt, threadId })`. StateGuard changes the
+`workspacePath` it passes: production Runs receive a staging directory, while
+the runner implementation remains unchanged. A successful non-empty Run
+renames staging into the next immutable generation and then advances the
+ACTIVE pointer. Validation runs baseline and candidate sequentially against
+the same generation, with fresh ephemeral threads; both staging trees are
+always discarded. Promotion changes only the active release, never the active
+generation.
+
+The first production turn uses `codex exec`; later turns resume the stored
+Codex thread. Validation never uses that production thread. Deleting an Agent
+archives its workspace under `workspaces/.deleted/`.
+
+## Guarantees and limits
+
+Generations contain pure world state. `AGENTS.md` is platform-managed,
+synthesized into staging only, hashed, and stripped before diffing. The trusted
+verifier is outside Agent control and reads its command from server-side policy.
+
+The generation commit is **crash-safe, NOT ATOMIC**: `rename(staging ->
+gen_NNNN)` and the ACTIVE-pointer update are two operations. A crash between
+them can leave a harmless orphaned generation, never a missing or corrupted
+active generation. Separately, the persistent workspace is the transaction
+boundary; it excludes external side effects such as network writes, email,
+and payments.
+
+Known limitations are intentional and visible to the judge:
+
+- Symlinks and empty directories are not tracked by the diff engine.
+- Full-tree copying retains each generation; garbage collection is not yet
+  implemented.
+- One execution of stochastic software is regression evidence, not proof of
+  causation. The system reports what we observed in that execution.
+
+Use this language precisely:
+
+| Say | Do not say |
+| --- | --- |
+| crash-safe | atomic |
+| tamper-evident | tamper-proof |
+| regression evidence | proof of causation |
+| the persistent workspace is the transaction boundary | we roll back everything the agent did |
+| we observed this behavior in this execution | the candidate always does this |
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for component and extension
 boundaries.
@@ -236,6 +297,16 @@ npm run check
 terraform fmt -check -recursive deploy/volcengine
 docker compose config
 ```
+
+The final MVP was tagged `mvp-complete`. The deterministic test suite is run
+serially on the Windows/Docker development host:
+
+```powershell
+npx vitest run --pool=forks --maxWorkers=1
+```
+
+See [the Devpost draft](docs/DEVPOST.md) and [the three-minute demo script](docs/DEMO-SCRIPT.md)
+for the submission copy and recording plan.
 
 ## Documentation
 
