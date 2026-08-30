@@ -22,12 +22,14 @@ import { defaultGatePolicy, evaluateAbsoluteGates, hashPolicy } from "./policy.j
 import { createRelease } from "./release.js";
 import { newDestructiveDeletions } from "./differential.js";
 import { createValidationContext } from "./validation-context.js";
+import { referenceCacheKey } from "./reference-cache.js";
 
 const now = () => new Date().toISOString();
 
 export class AgentService {
   private readonly activeExecutions = new Map<string, Promise<void>>();
   private readonly cancellationRequests = new Set<string>();
+  private readonly baselineReferences = new Map<string, { diff: WorkspaceDiff; gates: ReturnType<typeof evaluateAbsoluteGates> }>();
 
   constructor(
     private readonly config: AppConfig,
@@ -196,7 +198,19 @@ export class AgentService {
   private async executeValidation(agent: Agent, baseline: AgentRelease, candidate: AgentRelease, validation: ValidationRecord): Promise<void> {
     try {
       const basePath = this.workspaces.generationPath(agent);
-      const first = await this.runValidationExecution(agent, baseline, validation.baselineRunId, validation.task, basePath);
+      const referenceKey = referenceCacheKey({
+        baselineReleaseHash: validation.context.baselineReleaseHash,
+        generationId: validation.context.generationId,
+        taskHash: validation.context.taskHash,
+        policyHash: validation.context.policyHash,
+        arkModel: validation.context.arkModel,
+        codexVersion: validation.context.codexVersion,
+      });
+      const cachedReference = this.baselineReferences.get(referenceKey);
+      const first = cachedReference
+        ? structuredClone(cachedReference)
+        : await this.runValidationExecution(agent, baseline, validation.baselineRunId, validation.task, basePath);
+      if (!cachedReference) this.baselineReferences.set(referenceKey, structuredClone(first));
       const second = await this.runValidationExecution(agent, candidate, validation.candidateRunId, validation.task, basePath);
       const differentialDeletions = newDestructiveDeletions(first.diff, second.diff);
       // The baseline failing its own gates is not the candidate's fault. Reporting it as
