@@ -270,7 +270,12 @@ export class AgentService {
         const diff = await diffTrees(basePath, stagingPath, agentAtStart.activeGenerationId);
         let verification;
         try {
-          verification = await this.verifier.run({ workspacePath: stagingPath, command: agentAtStart.policy.verificationCommand });
+          verification = await this.verifier.run({
+            workspacePath: stagingPath,
+            command: agentAtStart.policy.verificationCommand,
+            agentId: agentAtStart.id,
+            runId: run.id,
+          });
         } catch (error) {
           verification = { passed: false, output: error instanceof Error ? error.message : String(error), exitCode: null };
         }

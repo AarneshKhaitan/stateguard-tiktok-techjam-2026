@@ -118,6 +118,11 @@ export interface AgentRunner {
 export interface VerificationRequest {
   workspacePath: string;
   command: string;
+  /** Container names must be unique per concurrent verification. Agents run
+   *  concurrently (the busy guard is per-Agent), so a name keyed only on the
+   *  instance id collides and Docker rejects the second one. */
+  agentId: string;
+  runId: string;
 }
 
 export interface VerificationResult {

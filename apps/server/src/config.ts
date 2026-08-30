@@ -14,6 +14,10 @@ const envSchema = z.object({
     .enum(["read-only", "workspace-write", "danger-full-access"])
     .default("workspace-write"),
   CODEX_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(600_000),
+  // Verification is a deterministic command, not an agentic loop, so it gets a much
+  // tighter budget than CODEX_TIMEOUT_MS. A verifier that hangs for ten minutes stalls
+  // the Run it gates, which is fatal during a live demo.
+  VERIFICATION_TIMEOUT_MS: z.coerce.number().int().min(1_000).default(120_000),
   CODEX_MAX_OUTPUT_BYTES: z.coerce.number().int().min(65_536).default(2_097_152),
   RUNTIME_PROVIDER: z.enum(["local-process", "container"]).default("local-process"),
   CONTAINER_ENGINE: z.string().min(1).default("docker"),
@@ -74,6 +78,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     codexBin: env.CODEX_BIN,
     codexSandboxMode: env.CODEX_SANDBOX_MODE,
     codexTimeoutMs: env.CODEX_TIMEOUT_MS,
+    verificationTimeoutMs: env.VERIFICATION_TIMEOUT_MS,
     codexMaxOutputBytes: env.CODEX_MAX_OUTPUT_BYTES,
     runtimeProvider: env.RUNTIME_PROVIDER,
     containerEngine: env.CONTAINER_ENGINE,
