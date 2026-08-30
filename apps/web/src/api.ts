@@ -25,9 +25,16 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     ...options,
     headers,
   });
-  const data = (await response.json().catch(() => ({}))) as T & { error?: string };
+  const data = (await response.json().catch(() => ({}))) as T & {
+    error?: string;
+    message?: string;
+  };
   if (!response.ok) {
-    throw new ApiError(data.error ?? "Request failed", response.status);
+    // Fastify puts the generic status name in `error` ("Conflict") and the actual
+    // explanation in `message`. Preferring `error` threw away every reason the
+    // backend takes care to state — a refused promotion showed only "Conflict"
+    // instead of naming which context field drifted and from what to what.
+    throw new ApiError(data.message ?? data.error ?? "Request failed", response.status);
   }
   return data;
 }
