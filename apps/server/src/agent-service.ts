@@ -10,9 +10,11 @@ import type {
   CreateAgentInput,
   Message,
   UpdateAgentInput,
+  VerificationRunner,
 } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
 import { diffTrees } from "./diff.js";
+import { defaultGatePolicy, evaluateAbsoluteGates } from "./policy.js";
 
 const now = () => new Date().toISOString();
 
@@ -25,6 +27,7 @@ export class AgentService {
     private readonly store: JsonStore,
     private readonly workspaces: WorkspaceManager,
     private readonly runner: AgentRunner,
+    private readonly verifier: VerificationRunner,
   ) {}
 
   async initialize(): Promise<void> {
@@ -74,6 +77,7 @@ export class AgentService {
       status: "ready",
       workspacePath: this.workspaces.workspacePath(id),
       activeGenerationId: "gen_0001",
+      policy: defaultGatePolicy(),
       codexThreadId: null,
       lastError: null,
       createdAt: timestamp,
@@ -176,6 +180,7 @@ export class AgentService {
       startedAt: null,
       completedAt: null,
       createdAt: timestamp,
+      gateFailures: null,
     };
     const message: Message = {
       id: randomUUID(),
@@ -263,6 +268,30 @@ export class AgentService {
         void agentsMdAfterHash;
         await this.workspaces.removeAgentsMd(stagingPath);
         const diff = await diffTrees(basePath, stagingPath, agentAtStart.activeGenerationId);
+        let verification;
+        try {
+          verification = await this.verifier.run({ workspacePath: stagingPath, command: agentAtStart.policy.verificationCommand });
+        } catch (error) {
+          verification = { passed: false, output: error instanceof Error ? error.message : String(error), exitCode: null };
+        }
+        const gates = evaluateAbsoluteGates(diff, agentAtStart.policy, verification);
+        if (!gates.certified) {
+          await this.workspaces.removeStaging(stagingPath);
+          const completedAt = now();
+          await this.store.mutate((database) => {
+            const storedRun = database.runs.find((item) => item.id === run.id);
+            const agent = database.agents.find((item) => item.id === agentAtStart.id);
+            if (!storedRun || !agent) return;
+            storedRun.status = "failed";
+            storedRun.error = "Run blocked: " + gates.failures.map((failure) => failure.reason).join("; ");
+            storedRun.gateFailures = gates.failures;
+            storedRun.completedAt = completedAt;
+            agent.status = "ready";
+            agent.lastError = null;
+            agent.updatedAt = completedAt;
+          });
+          return;
+        }
         let nextGenerationId = agentAtStart.activeGenerationId;
         if (!diff.isEmpty) nextGenerationId = await this.workspaces.commitStaging(agentAtStart, stagingPath);
         else await this.workspaces.removeStaging(stagingPath);
@@ -275,6 +304,7 @@ export class AgentService {
           storedRun.output = result.output;
           storedRun.usage = result.usage;
           storedRun.completedAt = completedAt;
+          storedRun.gateFailures = [];
           database.messages.push({ id: randomUUID(), agentId: agent.id, runId: run.id, role: "assistant", content: result.output, createdAt: completedAt });
           agent.status = "ready";
           agent.activeGenerationId = nextGenerationId;
@@ -297,6 +327,9 @@ export class AgentService {
           storedRun.status = cancelled ? "cancelled" : "failed";
           storedRun.error = message;
           storedRun.completedAt = completedAt;
+          if (!cancelled && (!storedRun.gateFailures || storedRun.gateFailures.length === 0)) {
+            storedRun.gateFailures = [{ code: "RUNTIME", reason: message }];
+          }
         }
         if (agent) {
           if (agent.status !== "stopped") {

@@ -3,6 +3,18 @@ export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancell
 export type MessageRole = "user" | "assistant";
 export type GenerationId = string;
 
+export interface GatePolicy {
+  protectedPaths: string[];
+  verificationCommand: string;
+  changeBudget: number;
+  policyHash: string;
+}
+
+export interface GateFailure {
+  code: "PROTECTED_PATH" | "CHANGE_BUDGET" | "VERIFICATION" | "RUNTIME";
+  reason: string;
+}
+
 export interface Agent {
   id: string;
   name: string;
@@ -11,6 +23,7 @@ export interface Agent {
   status: AgentStatus;
   workspacePath: string;
   activeGenerationId: GenerationId;
+  policy: GatePolicy;
   codexThreadId: string | null;
   lastError: string | null;
   createdAt: string;
@@ -43,10 +56,11 @@ export interface AgentRun {
   startedAt: string | null;
   completedAt: string | null;
   createdAt: string;
+  gateFailures?: GateFailure[] | null;
 }
 
 export interface Database {
-  version: 2;
+  version: 3;
   agents: Agent[];
   messages: Message[];
   runs: AgentRun[];
@@ -99,4 +113,19 @@ export interface AgentRunner {
   run(request: RunnerRequest): Promise<RunnerResult>;
   cancel(agentId: string): Promise<boolean>;
   isAvailable(): Promise<boolean>;
+}
+
+export interface VerificationRequest {
+  workspacePath: string;
+  command: string;
+}
+
+export interface VerificationResult {
+  passed: boolean;
+  output: string;
+  exitCode: number | null;
+}
+
+export interface VerificationRunner {
+  run(request: VerificationRequest): Promise<VerificationResult>;
 }

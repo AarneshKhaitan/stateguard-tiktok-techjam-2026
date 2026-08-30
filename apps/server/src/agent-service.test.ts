@@ -6,7 +6,7 @@ import { AgentService } from "./agent-service.js";
 import { loadConfig } from "./config.js";
 import { RunCancelledError } from "./errors.js";
 import { JsonStore } from "./store.js";
-import type { AgentRunner, RunnerRequest, RunnerResult } from "./types.js";
+import type { AgentRunner, RunnerRequest, RunnerResult, VerificationRequest, VerificationResult, VerificationRunner } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
 
 class FakeRunner implements AgentRunner {
@@ -25,6 +25,12 @@ class FakeRunner implements AgentRunner {
   }
 }
 
+class PassingVerificationRunner implements VerificationRunner {
+  async run(_request: VerificationRequest): Promise<VerificationResult> {
+    return { passed: true, output: "verified", exitCode: 0 };
+  }
+}
+
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
@@ -36,7 +42,7 @@ afterEach(async () => {
   );
 });
 
-async function makeService(runner: AgentRunner = new FakeRunner()): Promise<AgentService> {
+async function makeService(runner: AgentRunner = new FakeRunner(), verifier: VerificationRunner = new PassingVerificationRunner()): Promise<AgentService> {
   const root = await mkdtemp(path.join(tmpdir(), "launchpad-test-"));
   temporaryDirectories.push(root);
   const config = loadConfig({
@@ -52,6 +58,7 @@ async function makeService(runner: AgentRunner = new FakeRunner()): Promise<Agen
     new JsonStore(path.join(root, "data", "db.json")),
     new WorkspaceManager(path.join(root, "workspaces")),
     runner,
+    verifier,
   );
   await service.initialize();
   return service;
@@ -101,6 +108,45 @@ describe("Agent lifecycle", () => {
     expect(await readdir(path.join(agent.workspacePath, "generations", "gen_0002"))).not.toContain("AGENTS.md");
   });
 
+  it("blocks a protected-path change and preserves durable state", async () => {
+    const service = await makeService({
+      run: async (request) => {
+        await mkdir(path.join(request.workspacePath, "config"), { recursive: true });
+        await writeFile(path.join(request.workspacePath, "config", "production.json"), "unsafe", "utf8");
+        return { output: "changed protected config", threadId: "must-not-persist", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent({ name: "Protected" });
+    const { run } = await service.sendMessage(agent.id, "modify production config");
+    await expect.poll(() => service.getRun(run.id).status, { timeout: 15_000, interval: 25 }).toBe("failed");
+    expect(service.getRun(run.id).gateFailures).toEqual([{ code: "PROTECTED_PATH", reason: expect.stringContaining("config/production.json") }]);
+    expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
+    expect(service.getAgent(agent.id).codexThreadId).toBeNull();
+    expect(await readdir(path.join(agent.workspacePath, "staging"))).toEqual([]);
+    await expect(readFile(path.join(agent.workspacePath, "generations", "gen_0001", "config", "production.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("blocks when the trusted verifier fails, even for an otherwise safe diff", async () => {
+    const service = await makeService({
+      run: async (request) => {
+        await writeFile(path.join(request.workspacePath, "safe.txt"), "safe", "utf8");
+        return { output: "safe change", threadId: "must-not-persist", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    }, {
+      run: async () => ({ passed: false, output: "trusted verification failed", exitCode: 1 }),
+    });
+    const agent = await service.createAgent({ name: "Verifier" });
+    const { run } = await service.sendMessage(agent.id, "make a safe change");
+    await expect.poll(() => service.getRun(run.id).status, { timeout: 15_000, interval: 25 }).toBe("failed");
+    expect(service.getRun(run.id).gateFailures).toEqual([{ code: "VERIFICATION", reason: "trusted verification failed" }]);
+    expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
+    expect(service.getAgent(agent.id).codexThreadId).toBeNull();
+  });
+
   it("rolls back failed execution and cleans staging", async () => {
     const service = await makeService({
       run: async (request) => {
@@ -116,6 +162,7 @@ describe("Agent lifecycle", () => {
     await expect.poll(() => service.getRun(run.id).status, { timeout: 15_000, interval: 25 }).toBe("failed");
 
     expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
+    expect(service.getRun(run.id).gateFailures).toEqual([{ code: "RUNTIME", reason: "fake runner failed" }]);
     expect(await Promise.all([".gitignore", "README.md"].map((file) => readFile(path.join(agent.workspacePath, "generations", "gen_0001", file))))).toEqual(baselineFiles);
     await expect(readFile(path.join(agent.workspacePath, "generations", "gen_0001", "partial.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     expect(await readdir(path.join(agent.workspacePath, "staging"))).toEqual([]);
@@ -177,6 +224,7 @@ describe("Agent lifecycle", () => {
       new JsonStore(path.join(projectRoot, "data", "db.json")),
       new WorkspaceManager(root),
       new FakeRunner(),
+      new PassingVerificationRunner(),
     );
     await restarted.initialize();
     expect(restarted.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
@@ -196,6 +244,7 @@ describe("Agent lifecycle", () => {
       new JsonStore(path.join(projectRoot, "data", "db.json")),
       new WorkspaceManager(workspaceRoot),
       new FakeRunner(),
+      new PassingVerificationRunner(),
     );
     await restarted.initialize();
     expect(await readdir(path.join(agent.workspacePath, "generations", "gen_0001"))).not.toContain("AGENTS.md");

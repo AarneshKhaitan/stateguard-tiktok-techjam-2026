@@ -1,9 +1,10 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Database } from "./types.js";
+import { defaultGatePolicy } from "./policy.js";
 
 const emptyDatabase = (): Database => ({
-  version: 2,
+  version: 3,
   agents: [],
   messages: [],
   runs: [],
@@ -20,15 +21,15 @@ export class JsonStore {
     try {
       const raw = await readFile(this.filePath, "utf8");
       const parsed = JSON.parse(raw) as Database;
-      if (![1, 2].includes(parsed.version) || !Array.isArray(parsed.agents)) {
+      if (![1, 2, 3].includes(parsed.version) || !Array.isArray(parsed.agents)) {
         throw new Error("Unsupported database format");
       }
       this.data = {
         ...parsed,
-        version: 2,
-        agents: parsed.agents.map((agent) => ({ ...agent, activeGenerationId: agent.activeGenerationId ?? "gen_0001" })),
+        version: 3,
+        agents: parsed.agents.map((agent) => ({ ...agent, activeGenerationId: agent.activeGenerationId ?? "gen_0001", policy: agent.policy ?? defaultGatePolicy() })),
       };
-      if (parsed.version !== 2) await this.persist(this.data);
+      if (parsed.version !== 3) await this.persist(this.data);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;

@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import type { AppConfig } from "./config.js";
 import { buildCodexArgs, parseCodexEventLine } from "./codex-runner.js";
 import { RunCancelledError } from "./errors.js";
+import { buildRuntimeContainerArgs } from "./runtime-container-args.js";
 import type {
   AgentRunner,
   RunUsage,
@@ -40,49 +41,8 @@ export function buildContainerRunArgs(
   config: AppConfig,
 ): string[] {
   const name = containerName(request.agentId, config.runtimeInstanceId);
-  const engineName = config.containerEngine.split(/[\\/]/).at(-1)?.toLowerCase();
   return [
-    "run",
-    "--rm",
-    "--init",
-    "--name",
-    name,
-    "--label",
-    "io.codejam.launchpad=agent-runtime",
-    "--label",
-    "io.codejam.agent-id=" + request.agentId,
-    "--label",
-    "io.codejam.instance-id=" + config.runtimeInstanceId,
-    ...(engineName === "podman" ? ["--userns", "keep-id"] : []),
-    "--network",
-    "bridge",
-    "--security-opt",
-    "no-new-privileges",
-    "--cap-drop",
-    "ALL",
-    "--cpus",
-    String(config.containerCpuLimit),
-    "--memory",
-    config.containerMemoryLimit,
-    "--pids-limit",
-    String(config.containerPidsLimit),
-    "--user",
-    config.containerUser,
-    "--env",
-    "ARK_API_KEY",
-    "--env",
-    "CODEX_HOME=/codex-home",
-    "--env",
-    "HOME=/tmp",
-    "--env",
-    "NO_COLOR=1",
-    "--mount",
-    "type=bind,src=" + request.workspacePath + ",dst=/workspace",
-    "--mount",
-    "type=bind,src=" + config.codexHome + ",dst=/codex-home",
-    "--workdir",
-    "/workspace",
-    config.containerRuntimeImage,
+    ...buildRuntimeContainerArgs(request, config, name, { includeArk: true, includeCodexHome: true }),
     "codex",
     ...buildCodexArgs(request, config.codexSandboxMode, "/workspace"),
   ];
