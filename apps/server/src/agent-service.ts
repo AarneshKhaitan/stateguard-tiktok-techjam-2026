@@ -432,9 +432,10 @@ export class AgentService {
           prompt: run.prompt,
           threadId: agentAtStart.codexThreadId,
         });
-        // Hook for AGENTS.md tamper detection (stretch). A null after-hash means the
-        // Agent deleted its own control file; a differing hash means it rewrote it.
-        // Neither is enforced yet — the Run is still judged on its world-state diff.
+        // AGENTS.md tamper detection. A null after-hash means the Agent deleted its
+        // own control file; a differing hash means it rewrote it. Either is an
+        // absolute gate failure — without this an Agent can rewrite the instructions
+        // it is judged against, which makes every other gate advisory.
         const agentsMdAfterHash = await this.workspaces.hashAgentsMd(stagingPath);
         const agentsTampered = agentsMdAfterHash === null
           ? "Agent deleted platform-managed AGENTS.md"
