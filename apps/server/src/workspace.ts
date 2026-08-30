@@ -56,8 +56,18 @@ export class WorkspaceManager {
 
   async removeStaging(stagingPath: string): Promise<void> { await rm(stagingPath, { recursive: true, force: true }); }
   async removeAgentsMd(stagingPath: string): Promise<void> { await rm(path.join(stagingPath, "AGENTS.md"), { force: true }); }
-  async hashAgentsMd(stagingPath: string): Promise<string> {
-    return createHash("sha256").update(await readFile(path.join(stagingPath, "AGENTS.md"))).digest("hex");
+  /**
+   * Returns null when the Agent deleted AGENTS.md during the Run. A missing control
+   * file is a tamper signal, not a platform failure: the Run's own work may be
+   * perfectly valid, so it must still be diffed and committed on its merits.
+   */
+  async hashAgentsMd(stagingPath: string): Promise<string | null> {
+    try {
+      return createHash("sha256").update(await readFile(path.join(stagingPath, "AGENTS.md"))).digest("hex");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
   }
 
   async commitStaging(agent: Agent, stagingPath: string): Promise<GenerationId> {

@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "./config.js";
 import {
@@ -32,8 +33,12 @@ describe("Container Codex runner", () => {
       "launchpad-test-instance-agent-unsafe",
     );
     expect(args).toContain("runtime:test");
+    // workspacePath is passed through raw by buildContainerRunArgs, so the literal is
+    // what the code actually emits. codexHome goes through path.resolve() in config.ts,
+    // which is a no-op on POSIX but yields C:\tmp\... on Windows — so resolve it here
+    // too rather than hard-coding a POSIX literal. Same assertion, portable.
     expect(args).toContain("type=bind,src=/tmp/agent-workspace,dst=/workspace");
-    expect(args).toContain("type=bind,src=/tmp/codex-home,dst=/codex-home");
+    expect(args).toContain(`type=bind,src=${path.resolve("/tmp/codex-home")},dst=/codex-home`);
     expect(args).toContain("501:20");
     expect(args).toContain("workspace-write");
     expect(args).toContain("/workspace");

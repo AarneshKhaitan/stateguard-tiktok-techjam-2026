@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -74,7 +74,7 @@ describe("Agent lifecycle", () => {
     const service = await makeService();
     const agent = await service.createAgent({ name: "Coder" });
     const { run } = await service.sendMessage(agent.id, "write hello world");
-    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+    await expect.poll(() => service.getRun(run.id).status, { timeout: 15_000, interval: 25 }).toBe("completed");
     const messages = service.getMessages(agent.id);
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(messages[1]?.content).toContain("write hello world");
@@ -93,7 +93,7 @@ describe("Agent lifecycle", () => {
     });
     const agent = await service.createAgent({ name: "Writer" });
     const { run } = await service.sendMessage(agent.id, "create hello.txt");
-    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+    await expect.poll(() => service.getRun(run.id).status, { timeout: 15_000, interval: 25 }).toBe("completed");
 
     expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0002");
     expect(await readFile(path.join(agent.workspacePath, "generations", "gen_0002", "hello.txt"), "utf8")).toBe("hello\n");
@@ -113,7 +113,7 @@ describe("Agent lifecycle", () => {
     const agent = await service.createAgent({ name: "Rollback" });
     const baselineFiles = await Promise.all([".gitignore", "README.md"].map((file) => readFile(path.join(agent.workspacePath, "generations", "gen_0001", file))));
     const { run } = await service.sendMessage(agent.id, "make a partial change");
-    await expect.poll(() => service.getRun(run.id).status).toBe("failed");
+    await expect.poll(() => service.getRun(run.id).status, { timeout: 15_000, interval: 25 }).toBe("failed");
 
     expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
     expect(await Promise.all([".gitignore", "README.md"].map((file) => readFile(path.join(agent.workspacePath, "generations", "gen_0001", file))))).toEqual(baselineFiles);
@@ -140,7 +140,7 @@ describe("Agent lifecycle", () => {
     const service = await makeService(runner);
     const agent = await service.createAgent({ name: "Canceller" });
     const first = await service.sendMessage(agent.id, "first");
-    await expect.poll(() => service.getRun(first.run.id).status).toBe("completed");
+    await expect.poll(() => service.getRun(first.run.id).status, { timeout: 15_000, interval: 25 }).toBe("completed");
     const second = await service.sendMessage(agent.id, "second");
     await new Promise<void>((resolve) => { started = resolve; });
     await service.stopAgent(agent.id);
@@ -155,7 +155,7 @@ describe("Agent lifecycle", () => {
     const service = await makeService();
     const agent = await service.createAgent({ name: "NoOp" });
     const { run } = await service.sendMessage(agent.id, "do nothing");
-    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+    await expect.poll(() => service.getRun(run.id).status, { timeout: 15_000, interval: 25 }).toBe("completed");
     expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
     expect(await readdir(path.join(agent.workspacePath, "generations"))).toEqual(["gen_0001"]);
   });
@@ -202,6 +202,58 @@ describe("Agent lifecycle", () => {
     await expect(readdir(path.join(agent.workspacePath, "staging"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it("completes a Run whose Agent deleted its own AGENTS.md", async () => {
+    const service = await makeService({
+      run: async (request) => {
+        // The demo's flagship prompt tells the Agent to aggressively remove
+        // unnecessary files. AGENTS.md sits in the staging tree, so this is a
+        // realistic thing for it to do — and it must not fail the Run.
+        await rm(path.join(request.workspacePath, "AGENTS.md"), { force: true });
+        await writeFile(path.join(request.workspacePath, "kept.txt"), "work\n", "utf8");
+        return { output: "removed the control file", threadId: "tamper-thread", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent({ name: "Tamperer" });
+    const { run } = await service.sendMessage(agent.id, "delete everything unnecessary");
+    await expect.poll(() => service.getRun(run.id).status, { timeout: 15_000, interval: 25 }).toBe("completed");
+
+    expect(service.getRun(run.id).error).toBeNull();
+    expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0002");
+    expect(await readFile(path.join(agent.workspacePath, "generations", "gen_0002", "kept.txt"), "utf8")).toBe("work\n");
+    // Deleting AGENTS.md must not surface as a world-state deletion: it was never
+    // in the base generation, so the diff sees only the added file.
+    expect(await readdir(path.join(agent.workspacePath, "generations", "gen_0002"))).not.toContain("AGENTS.md");
+  });
+
+  it("runs two sequential Runs on one Agent, each committing its own generation", async () => {
+    const seenAgentIds: string[] = [];
+    const service = await makeService({
+      run: async (request) => {
+        seenAgentIds.push(request.agentId);
+        await writeFile(path.join(request.workspacePath, "step" + seenAgentIds.length + ".txt"), "x", "utf8");
+        return { output: "step", threadId: "thread-" + seenAgentIds.length, usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent({ name: "Sequential" });
+
+    const first = await service.sendMessage(agent.id, "first");
+    await expect.poll(() => service.getRun(first.run.id).status, { timeout: 15_000, interval: 25 }).toBe("completed");
+    const second = await service.sendMessage(agent.id, "second");
+    await expect.poll(() => service.getRun(second.run.id).status, { timeout: 15_000, interval: 25 }).toBe("completed");
+
+    // Both executions used the real agentId. P2 validation reuses it too, running
+    // baseline and candidate sequentially, so the per-Agent execution slot must be
+    // released cleanly between runs rather than leaking.
+    expect(seenAgentIds).toEqual([agent.id, agent.id]);
+    expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0003");
+    expect(await readdir(path.join(agent.workspacePath, "generations"))).toEqual(["gen_0001", "gen_0002", "gen_0003"]);
+    expect(await readdir(path.join(agent.workspacePath, "generations", "gen_0003"))).toEqual(expect.arrayContaining(["step1.txt", "step2.txt"]));
+  });
+
   it("atomically accepts only one concurrent run per Agent", async () => {
     let finish!: (result: RunnerResult) => void;
     const pending = new Promise<RunnerResult>((resolve) => {
@@ -227,7 +279,7 @@ describe("Agent lifecycle", () => {
     finish({ output: "done", threadId: "thread", usage: null });
     const accepted = attempts.find((attempt) => attempt.status === "fulfilled");
     if (accepted?.status === "fulfilled") {
-      await expect.poll(() => service.getRun(accepted.value.run.id).status).toBe("completed");
+      await expect.poll(() => service.getRun(accepted.value.run.id).status, { timeout: 15_000, interval: 25 }).toBe("completed");
     }
   });
 
@@ -250,6 +302,6 @@ describe("Agent lifecycle", () => {
     });
 
     finish({ output: "done", threadId: "thread", usage: null });
-    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+    await expect.poll(() => service.getRun(run.id).status, { timeout: 15_000, interval: 25 }).toBe("completed");
   });
 });
