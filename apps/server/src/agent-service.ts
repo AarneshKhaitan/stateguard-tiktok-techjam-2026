@@ -12,6 +12,7 @@ import type {
   UpdateAgentInput,
 } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
+import { diffTrees } from "./diff.js";
 
 const now = () => new Date().toISOString();
 
@@ -44,6 +45,8 @@ export class AgentService {
         }
       }
     });
+    for (const agent of this.store.snapshot().agents) await this.workspaces.migrateAgent(agent);
+    await this.workspaces.sweepStaging();
   }
 
   listAgents(): Agent[] {
@@ -70,6 +73,7 @@ export class AgentService {
       instructions: input.instructions?.trim() ?? "",
       status: "ready",
       workspacePath: this.workspaces.workspacePath(id),
+      activeGenerationId: "gen_0001",
       codexThreadId: null,
       lastError: null,
       createdAt: timestamp,
@@ -100,7 +104,6 @@ export class AgentService {
       agent.updatedAt = now();
       return structuredClone(agent);
     });
-    await this.workspaces.writeInstructions(updated);
     return updated;
   }
 
@@ -244,34 +247,42 @@ export class AgentService {
       if (this.cancellationRequests.has(agentAtStart.id)) {
         throw new RunCancelledError();
       }
-      const result = await this.runner.run({
-        agentId: agentAtStart.id,
-        workspacePath: agentAtStart.workspacePath,
-        prompt: run.prompt,
-        threadId: agentAtStart.codexThreadId,
-      });
-      const completedAt = now();
-      await this.store.mutate((database) => {
-        const storedRun = database.runs.find((item) => item.id === run.id);
-        const agent = database.agents.find((item) => item.id === agentAtStart.id);
-        if (!storedRun || !agent) return;
-        storedRun.status = "completed";
-        storedRun.output = result.output;
-        storedRun.usage = result.usage;
-        storedRun.completedAt = completedAt;
-        database.messages.push({
-          id: randomUUID(),
-          agentId: agent.id,
-          runId: run.id,
-          role: "assistant",
-          content: result.output,
-          createdAt: completedAt,
+      const { stagingPath, basePath, agentsMdHash } = await this.workspaces.prepareStaging(agentAtStart, run.id);
+      try {
+        const result = await this.runner.run({
+          agentId: agentAtStart.id,
+          workspacePath: stagingPath,
+          prompt: run.prompt,
+          threadId: agentAtStart.codexThreadId,
         });
-        agent.status = "ready";
-        agent.codexThreadId = result.threadId;
-        agent.lastError = null;
-        agent.updatedAt = completedAt;
-      });
+        const agentsMdAfterHash = await this.workspaces.hashAgentsMd(stagingPath);
+        void agentsMdHash;
+        void agentsMdAfterHash;
+        await this.workspaces.removeAgentsMd(stagingPath);
+        const diff = await diffTrees(basePath, stagingPath, agentAtStart.activeGenerationId);
+        let nextGenerationId = agentAtStart.activeGenerationId;
+        if (!diff.isEmpty) nextGenerationId = await this.workspaces.commitStaging(agentAtStart, stagingPath);
+        else await this.workspaces.removeStaging(stagingPath);
+        const completedAt = now();
+        await this.store.mutate((database) => {
+          const storedRun = database.runs.find((item) => item.id === run.id);
+          const agent = database.agents.find((item) => item.id === agentAtStart.id);
+          if (!storedRun || !agent) return;
+          storedRun.status = "completed";
+          storedRun.output = result.output;
+          storedRun.usage = result.usage;
+          storedRun.completedAt = completedAt;
+          database.messages.push({ id: randomUUID(), agentId: agent.id, runId: run.id, role: "assistant", content: result.output, createdAt: completedAt });
+          agent.status = "ready";
+          agent.activeGenerationId = nextGenerationId;
+          agent.codexThreadId = result.threadId;
+          agent.lastError = null;
+          agent.updatedAt = completedAt;
+        });
+      } catch (error) {
+        await this.workspaces.removeStaging(stagingPath);
+        throw error;
+      }
     } catch (error) {
       const completedAt = now();
       const cancelled = error instanceof RunCancelledError;

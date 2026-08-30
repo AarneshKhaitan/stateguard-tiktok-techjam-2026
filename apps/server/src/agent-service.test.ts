@@ -1,9 +1,10 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentService } from "./agent-service.js";
 import { loadConfig } from "./config.js";
+import { RunCancelledError } from "./errors.js";
 import { JsonStore } from "./store.js";
 import type { AgentRunner, RunnerRequest, RunnerResult } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
@@ -78,6 +79,127 @@ describe("Agent lifecycle", () => {
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(messages[1]?.content).toContain("write hello world");
     expect(service.getAgent(agent.id).codexThreadId).toBe("fake-thread");
+    expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
+  });
+
+  it("commits a changed staging workspace as the next generation", async () => {
+    const service = await makeService({
+      run: async (request) => {
+        await writeFile(path.join(request.workspacePath, "hello.txt"), "hello\n", "utf8");
+        return { output: "created", threadId: "thread-2", usage: null };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent({ name: "Writer" });
+    const { run } = await service.sendMessage(agent.id, "create hello.txt");
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+
+    expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0002");
+    expect(await readFile(path.join(agent.workspacePath, "generations", "gen_0002", "hello.txt"), "utf8")).toBe("hello\n");
+    expect(await readdir(path.join(agent.workspacePath, "generations", "gen_0001"))).not.toContain("hello.txt");
+    expect(await readdir(path.join(agent.workspacePath, "generations", "gen_0002"))).not.toContain("AGENTS.md");
+  });
+
+  it("rolls back failed execution and cleans staging", async () => {
+    const service = await makeService({
+      run: async (request) => {
+        await writeFile(path.join(request.workspacePath, "partial.txt"), "must not persist", "utf8");
+        throw new Error("fake runner failed");
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent({ name: "Rollback" });
+    const baselineFiles = await Promise.all([".gitignore", "README.md"].map((file) => readFile(path.join(agent.workspacePath, "generations", "gen_0001", file))));
+    const { run } = await service.sendMessage(agent.id, "make a partial change");
+    await expect.poll(() => service.getRun(run.id).status).toBe("failed");
+
+    expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
+    expect(await Promise.all([".gitignore", "README.md"].map((file) => readFile(path.join(agent.workspacePath, "generations", "gen_0001", file))))).toEqual(baselineFiles);
+    await expect(readFile(path.join(agent.workspacePath, "generations", "gen_0001", "partial.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(path.join(agent.workspacePath, "staging"))).toEqual([]);
+  });
+
+  it("rolls back a cancelled execution and preserves the prior thread", async () => {
+    let runCount = 0;
+    let started!: () => void;
+    let cancelRun!: () => void;
+    const runner: AgentRunner = {
+      run: async (request) => {
+        runCount += 1;
+        if (runCount === 1) return { output: "first", threadId: "original-thread", usage: null };
+        await writeFile(path.join(request.workspacePath, "cancelled.txt"), "discard", "utf8");
+        started();
+        await new Promise<never>((_, reject) => { cancelRun = () => reject(new RunCancelledError()); });
+        throw new Error("unreachable");
+      },
+      cancel: async () => { cancelRun(); return true; },
+      isAvailable: async () => true,
+    };
+    const service = await makeService(runner);
+    const agent = await service.createAgent({ name: "Canceller" });
+    const first = await service.sendMessage(agent.id, "first");
+    await expect.poll(() => service.getRun(first.run.id).status).toBe("completed");
+    const second = await service.sendMessage(agent.id, "second");
+    await new Promise<void>((resolve) => { started = resolve; });
+    await service.stopAgent(agent.id);
+    expect(service.getRun(second.run.id).status).toBe("cancelled");
+    expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
+    expect(service.getAgent(agent.id).codexThreadId).toBe("original-thread");
+    await expect(readFile(path.join(agent.workspacePath, "generations", "gen_0001", "cancelled.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readdir(path.join(agent.workspacePath, "staging"))).toEqual([]);
+  });
+
+  it("does not mint a generation for an empty diff", async () => {
+    const service = await makeService();
+    const agent = await service.createAgent({ name: "NoOp" });
+    const { run } = await service.sendMessage(agent.id, "do nothing");
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+    expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
+    expect(await readdir(path.join(agent.workspacePath, "generations"))).toEqual(["gen_0001"]);
+  });
+
+  it("keeps ACTIVE on the old generation after a crash before pointer publication", async () => {
+    const service = await makeService();
+    const agent = await service.createAgent({ name: "Crash" });
+    const workspaceRoot = path.dirname(agent.workspacePath);
+    const projectRoot = path.dirname(workspaceRoot);
+    const workspace = new WorkspaceManager(workspaceRoot);
+    const prepared = await workspace.prepareStaging(agent, "crash-test");
+    await writeFile(path.join(prepared.stagingPath, "orphan.txt"), "orphan", "utf8");
+    await workspace.removeAgentsMd(prepared.stagingPath);
+    await workspace.commitStaging(agent, prepared.stagingPath);
+
+    const root = workspaceRoot;
+    const restarted = new AgentService(
+      loadConfig({ NODE_ENV: "test", APP_DATA_DIR: path.join(projectRoot, "data"), AGENT_WORKSPACE_ROOT: root, CODEX_HOME: path.join(projectRoot, "codex"), ARK_API_KEY: "test-key", ARK_MODEL: "ep-test" }),
+      new JsonStore(path.join(projectRoot, "data", "db.json")),
+      new WorkspaceManager(root),
+      new FakeRunner(),
+    );
+    await restarted.initialize();
+    expect(restarted.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
+    expect(await readdir(path.join(agent.workspacePath, "generations"))).toEqual(["gen_0001", "gen_0002"]);
+    expect(await readFile(path.join(agent.workspacePath, "generations", "gen_0001", "README.md"), "utf8")).toContain("workspace");
+  });
+
+  it("never stores AGENTS.md inside a generation and sweeps orphan staging on boot", async () => {
+    const service = await makeService();
+    const agent = await service.createAgent({ name: "Control" });
+    const workspaceRoot = path.dirname(agent.workspacePath);
+    const projectRoot = path.dirname(workspaceRoot);
+    await mkdir(path.join(agent.workspacePath, "staging", "tx-orphan"), { recursive: true });
+    await writeFile(path.join(agent.workspacePath, "staging", "tx-orphan", "AGENTS.md"), "orphan", "utf8");
+    const restarted = new AgentService(
+      loadConfig({ NODE_ENV: "test", APP_DATA_DIR: path.join(projectRoot, "data"), AGENT_WORKSPACE_ROOT: workspaceRoot, CODEX_HOME: path.join(projectRoot, "codex"), ARK_API_KEY: "test-key", ARK_MODEL: "ep-test" }),
+      new JsonStore(path.join(projectRoot, "data", "db.json")),
+      new WorkspaceManager(workspaceRoot),
+      new FakeRunner(),
+    );
+    await restarted.initialize();
+    expect(await readdir(path.join(agent.workspacePath, "generations", "gen_0001"))).not.toContain("AGENTS.md");
+    await expect(readdir(path.join(agent.workspacePath, "staging"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("atomically accepts only one concurrent run per Agent", async () => {

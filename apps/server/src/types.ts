@@ -1,6 +1,7 @@
 export type AgentStatus = "ready" | "busy" | "stopped" | "error";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type MessageRole = "user" | "assistant";
+export type GenerationId = string;
 
 export interface Agent {
   id: string;
@@ -9,6 +10,7 @@ export interface Agent {
   instructions: string;
   status: AgentStatus;
   workspacePath: string;
+  activeGenerationId: GenerationId;
   codexThreadId: string | null;
   lastError: string | null;
   createdAt: string;
@@ -44,10 +46,28 @@ export interface AgentRun {
 }
 
 export interface Database {
-  version: 1;
+  version: 2;
   agents: Agent[];
   messages: Message[];
   runs: AgentRun[];
+}
+
+export interface FileChange {
+  path: string;
+  kind: "added" | "modified" | "deleted";
+  beforeHash?: string;
+  afterHash?: string;
+  beforeSize?: number;
+  afterSize?: number;
+}
+
+export interface WorkspaceDiff {
+  baseGenerationId: GenerationId;
+  changes: FileChange[];
+  addedCount: number;
+  modifiedCount: number;
+  deletedCount: number;
+  isEmpty: boolean;
 }
 
 export interface CreateAgentInput {
