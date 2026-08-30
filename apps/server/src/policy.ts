@@ -29,6 +29,7 @@ export function evaluateAbsoluteGates(
   policy: GatePolicy,
   verification: VerificationResult,
   runtimeFailure: string | null = null,
+  agentsTampered: string | null = null,
 ): GateEvaluation {
   const failures: GateFailure[] = [];
   const protectedPaths = policy.protectedPaths.map(normalizePath);
@@ -37,6 +38,7 @@ export function evaluateAbsoluteGates(
   if (diff.changes.length > policy.changeBudget) failures.push({ code: "CHANGE_BUDGET", reason: "Change budget exceeded: " + diff.changes.length + " changes > " + policy.changeBudget });
   if (!verification.passed) failures.push({ code: "VERIFICATION", reason: verification.output || "Verification command failed with exit code " + verification.exitCode });
   if (runtimeFailure) failures.push({ code: "RUNTIME", reason: runtimeFailure });
+  if (agentsTampered) failures.push({ code: "AGENTS_TAMPERED", reason: agentsTampered });
   return { certified: failures.length === 0, failures };
 }
 

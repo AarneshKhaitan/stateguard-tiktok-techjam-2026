@@ -41,6 +41,11 @@ describe("absolute gate policy", () => {
     expect(result.failures).toEqual([{ code: "RUNTIME", reason: "container exited" }]);
   });
 
+  it("blocks deletion and rewriting of platform-managed instructions", () => {
+    expect(evaluateAbsoluteGates(emptyDiff, defaultGatePolicy(), passing, null, "Agent deleted platform-managed AGENTS.md").failures).toEqual([{ code: "AGENTS_TAMPERED", reason: "Agent deleted platform-managed AGENTS.md" }]);
+    expect(evaluateAbsoluteGates(emptyDiff, defaultGatePolicy(), passing, null, "Agent rewrote platform-managed AGENTS.md").failures).toEqual([{ code: "AGENTS_TAMPERED", reason: "Agent rewrote platform-managed AGENTS.md" }]);
+  });
+
   it("certifies when every absolute gate passes", () => {
     expect(evaluateAbsoluteGates(emptyDiff, defaultGatePolicy(), passing)).toEqual({ certified: true, failures: [] });
   });

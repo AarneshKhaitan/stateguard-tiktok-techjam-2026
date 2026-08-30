@@ -251,12 +251,12 @@ describe("Agent lifecycle", () => {
     await expect(readdir(path.join(agent.workspacePath, "staging"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("completes a Run whose Agent deleted its own AGENTS.md", async () => {
+  it("blocks a Run whose Agent deleted its own AGENTS.md", async () => {
     const service = await makeService({
       run: async (request) => {
         // The demo's flagship prompt tells the Agent to aggressively remove
-        // unnecessary files. AGENTS.md sits in the staging tree, so this is a
-        // realistic thing for it to do — and it must not fail the Run.
+        // AGENTS.md sits in the staging tree, so this is a realistic tamper
+        // attempt and must be rejected without touching the generation.
         await rm(path.join(request.workspacePath, "AGENTS.md"), { force: true });
         await writeFile(path.join(request.workspacePath, "kept.txt"), "work\n", "utf8");
         return { output: "removed the control file", threadId: "tamper-thread", usage: null };
@@ -266,14 +266,23 @@ describe("Agent lifecycle", () => {
     });
     const agent = await service.createAgent({ name: "Tamperer" });
     const { run } = await service.sendMessage(agent.id, "delete everything unnecessary");
-    await expect.poll(() => service.getRun(run.id).status, { timeout: 15_000, interval: 25 }).toBe("completed");
+    await expect.poll(() => service.getRun(run.id).status, { timeout: 15_000, interval: 25 }).toBe("failed");
 
-    expect(service.getRun(run.id).error).toBeNull();
-    expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0002");
-    expect(await readFile(path.join(agent.workspacePath, "generations", "gen_0002", "kept.txt"), "utf8")).toBe("work\n");
-    // Deleting AGENTS.md must not surface as a world-state deletion: it was never
-    // in the base generation, so the diff sees only the added file.
-    expect(await readdir(path.join(agent.workspacePath, "generations", "gen_0002"))).not.toContain("AGENTS.md");
+    expect(service.getRun(run.id).gateFailures).toEqual([{ code: "AGENTS_TAMPERED", reason: "Agent deleted platform-managed AGENTS.md" }]);
+    expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
+    await expect(readFile(path.join(agent.workspacePath, "generations", "gen_0001", "kept.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("blocks a Run whose Agent rewrites its own AGENTS.md", async () => {
+    const service = await makeService({
+      run: async (request) => { await writeFile(path.join(request.workspacePath, "AGENTS.md"), "tampered", "utf8"); return { output: "rewrote control file", threadId: "must-not-persist", usage: null }; },
+      cancel: async () => false, isAvailable: async () => true,
+    });
+    const agent = await service.createAgent({ name: "Rewriter" });
+    const { run } = await service.sendMessage(agent.id, "rewrite your instructions");
+    await expect.poll(() => service.getRun(run.id).status, { timeout: 15_000, interval: 25 }).toBe("failed");
+    expect(service.getRun(run.id).gateFailures).toEqual([{ code: "AGENTS_TAMPERED", reason: "Agent rewrote platform-managed AGENTS.md" }]);
+    expect(service.getAgent(agent.id).codexThreadId).toBeNull();
   });
 
   it("runs two sequential Runs on one Agent, each committing its own generation", async () => {

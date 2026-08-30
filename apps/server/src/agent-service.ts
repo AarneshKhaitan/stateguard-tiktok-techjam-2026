@@ -219,15 +219,21 @@ export class AgentService {
   }
 
   private async runValidationExecution(agent: Agent, release: AgentRelease, runId: string, task: string, basePath: string): Promise<{ diff: WorkspaceDiff; gates: ReturnType<typeof evaluateAbsoluteGates> }> {
-    const { stagingPath } = await this.workspaces.prepareStagingFrom(agent, runId, basePath, release);
+    const { stagingPath, agentsMdHash } = await this.workspaces.prepareStagingFrom(agent, runId, basePath, release);
     try {
       const result = await this.runner.run({ agentId: agent.id, workspacePath: stagingPath, prompt: task, threadId: null });
+      const agentsMdAfterHash = await this.workspaces.hashAgentsMd(stagingPath);
+      const agentsTampered = agentsMdAfterHash === null
+        ? "Agent deleted platform-managed AGENTS.md"
+        : agentsMdAfterHash !== agentsMdHash
+          ? "Agent rewrote platform-managed AGENTS.md"
+          : null;
       await this.workspaces.removeAgentsMd(stagingPath);
       const diff = await diffTrees(basePath, stagingPath, agent.activeGenerationId);
       let verification;
       try { verification = await this.verifier.run({ workspacePath: stagingPath, command: agent.policy.verificationCommand, agentId: agent.id, runId }); }
       catch (error) { verification = { passed: false, output: error instanceof Error ? error.message : String(error), exitCode: null }; }
-      return { diff, gates: evaluateAbsoluteGates(diff, agent.policy, verification) };
+      return { diff, gates: evaluateAbsoluteGates(diff, agent.policy, verification, null, agentsTampered) };
     } finally { await this.workspaces.removeStaging(stagingPath); }
   }
 
@@ -430,8 +436,11 @@ export class AgentService {
         // Agent deleted its own control file; a differing hash means it rewrote it.
         // Neither is enforced yet — the Run is still judged on its world-state diff.
         const agentsMdAfterHash = await this.workspaces.hashAgentsMd(stagingPath);
-        void agentsMdHash;
-        void agentsMdAfterHash;
+        const agentsTampered = agentsMdAfterHash === null
+          ? "Agent deleted platform-managed AGENTS.md"
+          : agentsMdAfterHash !== agentsMdHash
+            ? "Agent rewrote platform-managed AGENTS.md"
+            : null;
         await this.workspaces.removeAgentsMd(stagingPath);
         const diff = await diffTrees(basePath, stagingPath, agentAtStart.activeGenerationId);
         let verification;
@@ -445,7 +454,7 @@ export class AgentService {
         } catch (error) {
           verification = { passed: false, output: error instanceof Error ? error.message : String(error), exitCode: null };
         }
-        const gates = evaluateAbsoluteGates(diff, agentAtStart.policy, verification);
+        const gates = evaluateAbsoluteGates(diff, agentAtStart.policy, verification, null, agentsTampered);
         if (!gates.certified) {
           await this.workspaces.removeStaging(stagingPath);
           const completedAt = now();

@@ -16,7 +16,7 @@ export interface GatePolicy {
 }
 
 export interface GateFailure {
-  code: "PROTECTED_PATH" | "CHANGE_BUDGET" | "VERIFICATION" | "RUNTIME";
+  code: "PROTECTED_PATH" | "CHANGE_BUDGET" | "VERIFICATION" | "RUNTIME" | "AGENTS_TAMPERED";
   reason: string;
 }
 
