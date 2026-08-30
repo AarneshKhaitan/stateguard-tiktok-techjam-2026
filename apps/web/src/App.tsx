@@ -184,7 +184,19 @@ export default function App() {
   const validateCandidate = async () => {
     if (!selected || !validationTask.trim()) return;
     setValidating(true); setError(null);
-    try { const result = await api.validate(selected.id, validationTask); setValidation(result.validation); await refreshAgents(); }
+    // The POST returns a queued record immediately — a validation is two full Codex runs
+    // and cannot be awaited inside one HTTP request. Poll the way Runs already do.
+    try {
+      const result = await api.validate(selected.id, validationTask);
+      setValidation(result.validation);
+      let current = result.validation;
+      while (current.status === "running") {
+        await new Promise((resolve) => setTimeout(resolve, 900));
+        current = (await api.validation(current.id)).validation;
+        setValidation(current);
+      }
+      await refreshAgents();
+    }
     catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setValidating(false); }
   };
@@ -509,7 +521,7 @@ export default function App() {
               <div className="playground-topbar"><div><span className="eyebrow">StateGuard control plane</span><h2>Releases and validation</h2></div><span className="session-info">ACTIVE {selected.activeGenerationId}</span></div>
               <div className="release-summary"><span>Active release: v{releases.find((item) => item.id === selected.activeReleaseId)?.version ?? "—"} · {selected.activeReleaseId.slice(0, 8)}</span><span>Candidate: {selected.candidateReleaseId ? "v" + (releases.find((item) => item.id === selected.candidateReleaseId)?.version ?? "—") : "none"}</span><span>Protected: {selected.policy.protectedPaths.join(", ") || "none"}</span></div>
               <div className="validation-controls"><input value={validationTask} onChange={(event) => setValidationTask(event.target.value)} placeholder="Fixed validation task" /><button className="button button-primary" onClick={validateCandidate} disabled={validating || !selected.candidateReleaseId}>{validating ? <Spinner /> : "Validate candidate"}</button></div>
-              {validation && <div className={"validation-result validation-" + validation.status}><strong>{validation.status.toUpperCase()}</strong><span>Context {validation.context.contextHash.slice(0, 12)}</span>{validation.error && <span>Runtime failure: {validation.error}</span>}{validation.differentialDeletions.length > 0 && <span>Differential block: new deletions — {validation.differentialDeletions.join(", ")}</span>}{[...validation.baselineGateFailures, ...validation.candidateGateFailures].map((failure, index) => <span key={failure.code + index}>Policy gate {failure.code}: {failure.reason}</span>)}{validation.candidateDiff.changes.length > 0 && <span>Candidate diff: {validation.candidateDiff.changes.map((change) => change.kind + " " + change.path).join(", ")}</span>}</div>}
+              {validation && <div className={"validation-result validation-" + validation.status}><strong>{validation.status.toUpperCase()}</strong><span>Context {validation.context.contextHash.slice(0, 12)}</span>{validation.error && <span>Runtime failure: {validation.error}</span>}{validation.differentialDeletions.length > 0 && <span>Differential block: new deletions — {validation.differentialDeletions.join(", ")}</span>}{validation.status === "baseline_unhealthy" && <span>The active release failed its own gates on this task — the candidate was not judged against it.</span>}{validation.baselineGateFailures.map((failure, index) => <span key={"b" + failure.code + index}>Active release gate {failure.code}: {failure.reason}</span>)}{validation.candidateGateFailures.map((failure, index) => <span key={"c" + failure.code + index}>Candidate gate {failure.code}: {failure.reason}</span>)}{validation.candidateDiff.changes.length > 0 && <span>Candidate diff: {validation.candidateDiff.changes.map((change) => change.kind + " " + change.path).join(", ")}</span>}</div>}
             </section>
 
             <section className="playground">

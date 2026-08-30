@@ -180,10 +180,17 @@ export class AgentService {
       createdAt: now(), completedAt: null,
     };
     await this.store.mutate((db) => { db.validations.push(validation); const stored = db.agents.find((item) => item.id === agentId); if (stored) { stored.status = "busy"; stored.updatedAt = now(); } });
+    // Fire-and-forget, exactly like sendMessage. A validation is two full Codex runs;
+    // awaiting it here would hold the HTTP request open for minutes and time out in the
+    // browser, despite the route answering 202. The client polls GET /api/validations/:id.
     const execution = this.executeValidation(agent, baseline, candidate, validation);
     this.activeExecutions.set(agentId, execution);
-    await execution;
-    return this.getValidation(validation.id);
+    void execution
+      .finally(() => {
+        if (this.activeExecutions.get(agentId) === execution) this.activeExecutions.delete(agentId);
+      })
+      .catch(() => undefined);
+    return validation;
   }
 
   private async executeValidation(agent: Agent, baseline: AgentRelease, candidate: AgentRelease, validation: ValidationRecord): Promise<void> {
@@ -192,19 +199,22 @@ export class AgentService {
       const first = await this.runValidationExecution(agent, baseline, validation.baselineRunId, validation.task, basePath);
       const second = await this.runValidationExecution(agent, candidate, validation.candidateRunId, validation.task, basePath);
       const differentialDeletions = newDestructiveDeletions(first.diff, second.diff);
-      const blocked = first.gates.failures.length > 0 || second.gates.failures.length > 0 || differentialDeletions.length > 0;
+      // The baseline failing its own gates is not the candidate's fault. Reporting it as
+      // "blocked" would attribute the active release's problem to the candidate, so it
+      // gets its own status. Enforcement is the same — nothing is certified against an
+      // unhealthy baseline — but the stated reason is honest.
+      const baselineUnhealthy = first.gates.failures.length > 0;
+      const blocked = second.gates.failures.length > 0 || differentialDeletions.length > 0;
       await this.store.mutate((db) => {
         const record = db.validations.find((item) => item.id === validation.id); const storedAgent = db.agents.find((item) => item.id === agent.id);
         if (!record || !storedAgent) return;
-        record.status = blocked ? "blocked" : "certified"; record.baselineDiff = first.diff; record.candidateDiff = second.diff;
+        record.status = baselineUnhealthy ? "baseline_unhealthy" : blocked ? "blocked" : "certified"; record.baselineDiff = first.diff; record.candidateDiff = second.diff;
         record.baselineGateFailures = first.gates.failures; record.candidateGateFailures = second.gates.failures; record.differentialDeletions = differentialDeletions; record.completedAt = now();
         storedAgent.status = "ready"; storedAgent.updatedAt = now();
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.store.mutate((db) => { const record = db.validations.find((item) => item.id === validation.id); const storedAgent = db.agents.find((item) => item.id === agent.id); if (record) { record.status = "failed"; record.error = message; record.completedAt = now(); } if (storedAgent) { storedAgent.status = "error"; storedAgent.lastError = message; storedAgent.updatedAt = now(); } });
-    } finally {
-      if (this.activeExecutions.get(agent.id) === this.activeExecutions.get(agent.id)) this.activeExecutions.delete(agent.id);
     }
   }
 

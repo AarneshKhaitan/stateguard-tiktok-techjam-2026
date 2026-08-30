@@ -81,5 +81,6 @@ export const api = {
   updatePolicy: (id: string, body: { protectedPaths: string[]; verificationCommand: string; changeBudget: number }) => request<{ agent: Agent }>("/api/agents/" + id + "/policy", { method: "PATCH", body: JSON.stringify(body) }),
   validate: (id: string, task: string) => request<{ validation: ValidationRecord }>("/api/agents/" + id + "/validations", { method: "POST", body: JSON.stringify({ task }) }),
   validations: (id: string) => request<{ validations: ValidationRecord[] }>("/api/agents/" + id + "/validations"),
+  validation: (id: string) => request<{ validation: ValidationRecord }>("/api/validations/" + id),
   run: (id: string) => request<{ run: AgentRun }>("/api/runs/" + id),
 };

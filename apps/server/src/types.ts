@@ -3,7 +3,10 @@ export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancell
 export type MessageRole = "user" | "assistant";
 export type GenerationId = string;
 export type ReleaseStatus = "active" | "candidate" | "retired";
-export type ValidationStatus = "running" | "certified" | "blocked" | "failed";
+/** `baseline_unhealthy` means the ACTIVE release failed its own gates on this task and
+ *  generation, so the candidate cannot be judged against it. Enforcement matches
+ *  `blocked` — nothing is certified — but the blame is attributed correctly. */
+export type ValidationStatus = "running" | "certified" | "blocked" | "baseline_unhealthy" | "failed";
 
 export interface GatePolicy {
   protectedPaths: string[];

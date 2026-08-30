@@ -34,13 +34,26 @@ async function makeService(): Promise<AgentService> {
   await service.initialize(); return service;
 }
 
+/** validateCandidate now returns a queued record — two Codex runs cannot be awaited
+ *  inside one HTTP request — so tests poll it the same way the browser does. */
+async function settle(service: AgentService, agentId: string, task: string) {
+  const started = await service.validateCandidate(agentId, task);
+  const deadline = Date.now() + 15_000;
+  let current = service.getValidation(started.id);
+  while (current.status === "running" && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    current = service.getValidation(started.id);
+  }
+  return current;
+}
+
 describe("P3 differential validation", () => {
   it("blocks a new deletion even when every absolute gate passes", async () => {
     const service = await makeService(); const agent = await service.createAgent({ name: "Guard" });
     await mkdir(path.join(agent.workspacePath, "generations", "gen_0001", "docs"), { recursive: true });
     await writeFile(path.join(agent.workspacePath, "generations", "gen_0001", "docs", "legacy-notes.md"), "keep", "utf8");
     const candidate = await service.updateAgent(agent.id, { instructions: "Be aggressive about cleanup" });
-    const validation = await service.validateCandidate(agent.id, "clean up");
+    const validation = await settle(service, agent.id, "clean up");
     expect(validation.status).toBe("blocked");
     expect(validation.baselineGateFailures).toEqual([]);
     expect(validation.candidateGateFailures).toEqual([]);
@@ -57,8 +70,47 @@ describe("P3 differential validation", () => {
     const after = service.getReleases(agent.id);
     expect(after).toHaveLength(2); expect(after.find((item) => item.id === before[0]?.id)?.instructions).toBe(before[0]?.instructions);
     expect(updated.candidateReleaseId).toBe(after[0]?.id);
-    expect((await service.validateCandidate(agent.id, "inspect")).status).toBe("certified");
+    expect((await settle(service, agent.id, "inspect")).status).toBe("certified");
     expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
+  });
+
+  it("discards validation staging and leaves production state untouched on both outcomes", async () => {
+    const service = await makeService();
+    const agent = await service.createAgent({ name: "Guard" });
+    await mkdir(path.join(agent.workspacePath, "generations", "gen_0001", "docs"), { recursive: true });
+    await writeFile(path.join(agent.workspacePath, "generations", "gen_0001", "docs", "legacy-notes.md"), "keep", "utf8");
+    const generationsBefore = await readdir(path.join(agent.workspacePath, "generations"));
+
+    // Certified path.
+    await service.updateAgent(agent.id, { instructions: "Be careful" });
+    expect((await settle(service, agent.id, "inspect")).status).toBe("certified");
+    expect(await readdir(path.join(agent.workspacePath, "staging"))).toEqual([]);
+    expect(await readdir(path.join(agent.workspacePath, "generations"))).toEqual(generationsBefore);
+
+    // Blocked path — the candidate deleted a file, which must not reach any generation.
+    await service.updateAgent(agent.id, { instructions: "Be aggressive about cleanup" });
+    expect((await settle(service, agent.id, "clean up")).status).toBe("blocked");
+    expect(await readdir(path.join(agent.workspacePath, "staging"))).toEqual([]);
+    expect(await readdir(path.join(agent.workspacePath, "generations"))).toEqual(generationsBefore);
+    expect(await readFile(path.join(agent.workspacePath, "generations", "gen_0001", "docs", "legacy-notes.md"), "utf8")).toBe("keep");
+    expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
+  });
+
+  it("never lets a validation touch the production Codex thread", async () => {
+    const service = await makeService();
+    const agent = await service.createAgent({ name: "Guard" });
+
+    // Establish a real production thread with an ordinary Run.
+    const { run } = await service.sendMessage(agent.id, "do some work");
+    await expect.poll(() => service.getRun(run.id).status, { timeout: 15_000, interval: 25 }).toBe("completed");
+    const productionThread = service.getAgent(agent.id).codexThreadId;
+    expect(productionThread).not.toBeNull();
+
+    await service.updateAgent(agent.id, { instructions: "Be careful" });
+    expect((await settle(service, agent.id, "inspect")).status).toBe("certified");
+
+    // Both validation branches ran with threadId: null and must not have written back.
+    expect(service.getAgent(agent.id).codexThreadId).toBe(productionThread);
   });
 
   it("compares deletions against the baseline, not against a heuristic", () => {
