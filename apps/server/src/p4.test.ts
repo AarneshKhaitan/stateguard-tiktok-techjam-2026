@@ -66,6 +66,43 @@ describe("P4 promotion and staleness", () => {
     await expect(service.promote(agent.id, validation.id)).rejects.toThrow(/policyHash drifted/);
   });
 
+  it("refuses promotion while a Run is in flight", async () => {
+    // Without a busy guard the CAS is defeatable: the generation check passes because
+    // the in-flight Run has not committed yet, and the Run then advances the generation
+    // straight afterwards, leaving a release promoted on evidence for a generation
+    // production has already left.
+    const root = await mkdtemp(path.join(tmpdir(), "stateguard-p4-busy-")); roots.push(root);
+    const config = loadConfig({ NODE_ENV: "test", APP_DATA_DIR: path.join(root, "data"), AGENT_WORKSPACE_ROOT: path.join(root, "workspaces"), CODEX_HOME: path.join(root, "codex"), ARK_API_KEY: "test", ARK_MODEL: "ep-test" });
+    let release!: () => void;
+    let running!: () => void;
+    const runnerStarted = new Promise<void>((resolve) => { running = resolve; });
+    let calls = 0;
+    const runner: AgentRunner = {
+      async run() {
+        calls += 1;
+        if (calls > 2) { running(); await new Promise<void>((resolve) => { release = resolve; }); }
+        return { output: "ok", threadId: "t", usage: null };
+      },
+      async cancel() { return false; }, async isAvailable() { return true; },
+    };
+    const verifier: VerificationRunner = { async run() { return { passed: true, output: "ok", exitCode: 0 }; } };
+    const service = new AgentService(config, new JsonStore(path.join(root, "data", "db.json")), new WorkspaceManager(path.join(root, "workspaces")), runner, verifier);
+    await service.initialize();
+
+    const agent = await service.createAgent({ name: "Guard" });
+    const validation = await certify(service, agent.id);
+
+    const run = await service.sendMessage(agent.id, "hold production open");
+    await runnerStarted;
+    expect(service.getAgent(agent.id).status).toBe("busy");
+
+    await expect(service.promote(agent.id, validation.id)).rejects.toThrow(/Run is in flight/);
+    expect(service.getAgent(agent.id).activeReleaseId).not.toBe(validation.candidateReleaseId);
+
+    release();
+    await expect.poll(() => service.getRun(run.run.id).status, { timeout: 15_000, interval: 25 }).toBe("completed");
+  });
+
   it("refuses blocked, running, and failed validations", async () => {
     const service = await makeService(false); const agent = await service.createAgent({ name: "Guard" });
     await expect(service.promote(agent.id)).rejects.toThrow(/no validation/);

@@ -250,6 +250,12 @@ export class AgentService {
     return this.store.mutate((database) => {
       const agent = database.agents.find((item) => item.id === id);
       if (!agent) throw new HttpError(404, "Agent not found");
+      // Without this, promotion during an in-flight Run defeats the whole CAS: the
+      // generation check passes because the Run has not committed yet, and the Run
+      // then advances the generation immediately afterwards — leaving a release
+      // promoted on evidence from a generation production has already left. Every
+      // other mutating operation guards on busy; this one has to as well.
+      if (agent.status === "busy") throw new HttpError(409, "Promotion refused: a Run is in flight; stop it or wait for it to finish");
       const validation = database.validations
         .filter((item) => item.agentId === id && (!validationId || item.id === validationId))
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
