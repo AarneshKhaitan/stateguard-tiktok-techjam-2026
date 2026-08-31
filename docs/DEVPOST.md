@@ -19,9 +19,9 @@ generation. Agent identity and policy are separate from the release. Before a
 new release is promoted, StateGuard runs the active release and candidate
 sequentially against the same generation, task, policy, and runtime. The
 candidate is blocked if it deletes a path the baseline did not delete. A
-successful certification is bound to a seven-field context fingerprint;
-promotion is refused if the generation, policy, release, task, model, or Codex
-version has drifted.
+successful certification is bound to a ten-field context fingerprint;
+promotion is refused if the generation (by content, not just its label), policy, release, task,
+model, Codex version, sandbox mode, or runtime image has drifted.
 
 ## Why the baseline comparison matters
 
@@ -47,8 +47,10 @@ Built on the same primitives, each independently tested:
   append-only HMAC-signed record carrying the previous entry's hash. The signing
   key is persisted, so restarts do not invalidate legitimate history.
   Tamper-evident under the server-key trust assumption — not tamper-proof.
-- **Audited human override.** A blocked candidate can be acknowledged for review
-  and promoted only with a recorded actor and reason.
+- **Audited human override, correctly scoped.** Behavioural drift escalates to
+  REVIEW_REQUIRED and is promotable only with a recorded actor and reason. An
+  absolute gate failure is BLOCKED and can never be acknowledged or overridden —
+  collapsing the two would make every hard invariant negotiable.
 - **Fork from a generation.** Any generation can be forked into an independent
   Agent with a fresh session — recovery, not just refusal.
 - **Canary rollout with auto-rollback**, opt-in and off by default.
@@ -69,6 +71,10 @@ The architecture diagram and local instructions are in the repository
 `workspacePath` at the existing `AgentRunner` seam; the starter runner is not
 forked. The public repository URL should be added here before submission.
 
+The repository also contains [docs/ARCHITECTURE.md](ARCHITECTURE.md), which
+describes the execution model, the release control plane, and the ten-field
+validation context.
+
 ## Honest limitations
 
 The persistent workspace is the transaction boundary, not external systems.
@@ -86,7 +92,7 @@ only the workspace path passed to the runner.
 
 ```powershell
 npm install
-npm run check   # typecheck, 60 tests, then both builds
+npm run check   # typecheck, 63 tests, then both builds
 ```
 
 Test files run serially by configuration (`apps/server/vitest.config.ts`). The

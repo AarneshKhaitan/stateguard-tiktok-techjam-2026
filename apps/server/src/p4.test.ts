@@ -110,4 +110,34 @@ describe("P4 promotion and staleness", () => {
     await expect(service.promote(agent.id, "00000000-0000-0000-0000-000000000000")).rejects.toThrow(/no validation/);
     expect(validation.status).toBe("certified");
   });
+
+  it("refuses promotion when the generation's CONTENT changes under a stable id", async () => {
+    // generationId is only a label. Editing a file inside generations/gen_0001 leaves
+    // the id unchanged, so evidence bound to the id alone would survive precisely the
+    // state change it exists to detect. Binding to content closes that.
+    const service = await makeService(false);
+    const agent = await service.createAgent({ name: "Guard" });
+    const validation = await certify(service, agent.id);
+    await writeFile(path.join(agent.workspacePath, "generations", "gen_0001", "README.md"), "edited out of band", "utf8");
+    await expect(service.promote(agent.id, validation.id)).rejects.toThrow(/generationHash drifted/);
+    expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
+    expect(service.getAgent(agent.id).activeReleaseId).not.toBe(validation.candidateReleaseId);
+  });
+
+  it("rejects a second concurrent validation inside the serialized mutation", async () => {
+    // The pre-flight busy check reads a snapshot, so two callers can both observe
+    // `ready`. Only the re-check inside store.mutate actually binds the decision.
+    const service = await makeService(false);
+    const agent = await service.createAgent({ name: "Guard" });
+    await service.updateAgent(agent.id, { instructions: "safe candidate" });
+    const results = await Promise.allSettled([
+      service.validateCandidate(agent.id, "fixed task"),
+      service.validateCandidate(agent.id, "fixed task"),
+    ]);
+    const accepted = results.filter((result) => result.status === "fulfilled");
+    const rejected = results.filter((result) => result.status === "rejected");
+    expect(accepted).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(String((rejected[0] as PromiseRejectedResult).reason)).toMatch(/already running/);
+  });
 });

@@ -44,3 +44,19 @@ export async function diffTrees(baseDir: string, candidateDir: string, baseGener
     isEmpty: changes.length === 0,
   };
 }
+
+/**
+ * Content digest of a whole tree. `generationId` is only a label — a human or a
+ * stray process can edit files inside generations/gen_0012 and the label still reads
+ * gen_0012, so certification bound to the id alone would survive a state change it
+ * was supposed to detect. Binding to content makes "the same world" mean the same
+ * world. Order-independent: entries are sorted before hashing.
+ */
+export async function hashTree(dir: string): Promise<string> {
+  const entries = await walkTree(dir);
+  const canonical = [...entries.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([relativePath, entry]) => relativePath + ":" + entry.sha256)
+    .join("\n");
+  return createHash("sha256").update(canonical).digest("hex");
+}

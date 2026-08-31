@@ -95,10 +95,18 @@ export interface ValidationContext {
   baselineReleaseHash: string;
   candidateReleaseHash: string;
   generationId: string;
+  /** Content digest of the base generation. The id alone is only a label: edit a file
+   *  inside generations/gen_0012 and it is still called gen_0012, so evidence bound to
+   *  the id would survive the very state change it exists to detect. */
+  generationHash: string;
   taskHash: string;
   policyHash: string;
   arkModel: string;
   codexVersion: string;
+  /** Enforcement context. Validating under workspace-write and then promoting after a
+   *  restart into danger-full-access is a change of what "the same runtime" means. */
+  sandboxMode: string;
+  runtimeImage: string;
   contextHash: string;
 }
 

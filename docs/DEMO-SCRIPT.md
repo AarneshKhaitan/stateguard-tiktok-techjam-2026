@@ -85,7 +85,7 @@ Say: “The evidence was valid when created, but not for this world anymore.”
 
 ## 2:35–3:00 — close
 
-Show the validation record and the seven-field context hash. Close with:
+Show the validation record and the ten-field context hash. Close with:
 “StateGuard does not claim to prove why a stochastic Agent acted. It records
 regression evidence from a same-state execution and refuses to use it after
 the state or enforcement context changes.”

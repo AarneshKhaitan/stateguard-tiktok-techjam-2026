@@ -17,7 +17,7 @@ import type {
   VerificationRunner,
 } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
-import { diffTrees } from "./diff.js";
+import { diffTrees, hashTree } from "./diff.js";
 import { defaultGatePolicy, evaluateAbsoluteGates, hashPolicy } from "./policy.js";
 import { createRelease } from "./release.js";
 import { newDestructiveDeletions } from "./differential.js";
@@ -187,19 +187,27 @@ export class AgentService {
 
   async validateCandidate(agentId: string, task: string): Promise<ValidationRecord> {
     if (!task.trim()) throw new HttpError(400, "Validation task is required");
+    // Read-only pre-flight so the expensive context can be built outside the store
+    // lock; every one of these conditions is re-checked inside the serialized mutation
+    // below, which is the only place the decision actually binds.
     const agent = this.getAgent(agentId);
     if (agent.status === "busy") throw new HttpError(409, "Stop the active run before validating");
     const database = this.store.snapshot();
     const candidate = database.releases.find((release) => release.id === agent.candidateReleaseId);
     const baseline = database.releases.find((release) => release.id === agent.activeReleaseId);
     if (!candidate || !baseline) throw new HttpError(409, "A candidate release is required");
+    // Hashed here, before the store lock, because hashing a tree is async and the
+    // mutation callback is synchronous.
+    const baseGenerationHash = await hashTree(this.workspaces.generationPath(agent));
     const validation: ValidationRecord = {
       id: randomUUID(), agentId, baselineRunId: randomUUID(), candidateRunId: randomUUID(), candidateReleaseId: candidate.id,
       status: "running", task: task.trim(),
       context: createValidationContext({
         baselineReleaseHash: baseline.releaseHash, candidateReleaseHash: candidate.releaseHash,
-        generationId: agent.activeGenerationId, taskHash: this.hashTask(task.trim()), policyHash: agent.policy.policyHash,
+        generationId: agent.activeGenerationId, generationHash: baseGenerationHash,
+        taskHash: this.hashTask(task.trim()), policyHash: agent.policy.policyHash,
         arkModel: this.config.arkModel, codexVersion: this.config.codexVersion,
+        sandboxMode: this.config.codexSandboxMode, runtimeImage: this.executionRuntimeId(),
       }),
       baselineDiff: this.emptyDiff(agent.activeGenerationId), candidateDiff: this.emptyDiff(agent.activeGenerationId),
       baselineGateFailures: [], candidateGateFailures: [], differentialDeletions: [], error: null,
@@ -207,7 +215,26 @@ export class AgentService {
       reviewAcknowledgement: null, promotionAudit: null,
       ghostJournal: [],
     };
-    await this.store.mutate((db) => { db.validations.push(validation); const stored = db.agents.find((item) => item.id === agentId); if (stored) { stored.status = "busy"; stored.updatedAt = now(); } });
+    // Re-check inside the serialized mutation. The pre-flight above reads a snapshot,
+    // so two concurrent validations — or a validation racing a sendMessage — could both
+    // observe `ready` and both proceed. sendMessage already does its checks here; this
+    // one has to as well, or the control plane admits competing executions and leaves
+    // the Runner to reject one of them.
+    await this.store.mutate((db) => {
+      const stored = db.agents.find((item) => item.id === agentId);
+      if (!stored) throw new HttpError(404, "Agent not found");
+      if (stored.status === "stopped") throw new HttpError(409, "Start the Agent before validating");
+      if (stored.status === "busy") throw new HttpError(409, "This Agent is already running");
+      if (stored.candidateReleaseId !== candidate.id) {
+        throw new HttpError(409, "The candidate release changed; revalidate against the current candidate");
+      }
+      if (stored.activeReleaseId !== baseline.id) {
+        throw new HttpError(409, "The active release changed; revalidate against the current baseline");
+      }
+      db.validations.push(validation);
+      stored.status = "busy";
+      stored.updatedAt = now();
+    });
     // Fire-and-forget, exactly like sendMessage. A validation is two full Codex runs;
     // awaiting it here would hold the HTTP request open for minutes and time out in the
     // browser, despite the route answering 202. The client polls GET /api/validations/:id.
@@ -287,6 +314,14 @@ export class AgentService {
     } finally { await this.workspaces.removeStaging(stagingPath); }
   }
 
+  /** Enforcement context identity: which runtime actually executes, under which
+   *  sandbox. Certifying under one and promoting under another is a real change. */
+  private executionRuntimeId(): string {
+    return this.config.runtimeProvider === "container"
+      ? "container:" + this.config.containerRuntimeImage
+      : "local-process:" + this.config.codexBin;
+  }
+
   private hashTask(task: string): string { return createHash("sha256").update(task).digest("hex"); }
   private emptyDiff(generationId: string): WorkspaceDiff { return { baseGenerationId: generationId, changes: [], addedCount: 0, modifiedCount: 0, deletedCount: 0, isEmpty: true }; }
 
@@ -320,7 +355,11 @@ export class AgentService {
   }
 
   async promote(id: string, validationId?: string, actor?: string, reason?: string): Promise<Agent> {
-    this.getAgent(id);
+    const preflight = this.getAgent(id);
+    // Hashed before the store lock, since the mutation callback is synchronous. The
+    // generation cannot move underneath us here: promote refuses while a Run is in
+    // flight, and only a Run advances the generation.
+    const currentGenerationHash = await hashTree(this.workspaces.generationPath(preflight));
     try {
       const promoted = await this.store.mutate((database) => {
       const agent = database.agents.find((item) => item.id === id);
@@ -342,10 +381,12 @@ export class AgentService {
       if (!active || !candidate || agent.candidateReleaseId !== candidate.id) throw new HttpError(409, "Promotion refused: candidate release is no longer current; revalidation required");
       const actual = createValidationContext({
         baselineReleaseHash: active.releaseHash, candidateReleaseHash: candidate.releaseHash,
-        generationId: agent.activeGenerationId, taskHash: this.hashTask(validation.task), policyHash: agent.policy.policyHash,
+        generationId: agent.activeGenerationId, generationHash: currentGenerationHash,
+        taskHash: this.hashTask(validation.task), policyHash: agent.policy.policyHash,
         arkModel: this.config.arkModel, codexVersion: this.config.codexVersion,
+        sandboxMode: this.config.codexSandboxMode, runtimeImage: this.executionRuntimeId(),
       });
-      const fields: Array<keyof Omit<typeof actual, "contextHash">> = ["baselineReleaseHash", "candidateReleaseHash", "generationId", "taskHash", "policyHash", "arkModel", "codexVersion"];
+      const fields: Array<keyof Omit<typeof actual, "contextHash">> = ["baselineReleaseHash", "candidateReleaseHash", "generationId", "generationHash", "taskHash", "policyHash", "arkModel", "codexVersion", "sandboxMode", "runtimeImage"];
       for (const field of fields) {
         if (actual[field] !== validation.context[field]) {
           throw new HttpError(409, `Promotion refused: ${field} drifted; revalidation required (${validation.context[field]} -> ${actual[field]})`);
