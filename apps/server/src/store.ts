@@ -34,7 +34,7 @@ export class JsonStore {
         if (!releases.some((release) => release.id === activeReleaseId)) releases.push({ ...createRelease(agent.id, agent, 1, "active", null), id: activeReleaseId });
         return { ...agent, activeGenerationId: agent.activeGenerationId ?? "gen_0001", policy: agent.policy ?? defaultGatePolicy(), activeReleaseId, candidateReleaseId: agent.candidateReleaseId ?? null, canaryPreviousReleaseId: agent.canaryPreviousReleaseId ?? null, canaryRunsRemaining: agent.canaryRunsRemaining ?? 0, canaryConsecutiveFailures: agent.canaryConsecutiveFailures ?? 0 };
       });
-      for (const validation of legacy.validations ?? []) { validation.reviewAcknowledgement ??= null; validation.promotionAudit ??= null; }
+      for (const validation of legacy.validations ?? []) { validation.reviewAcknowledgement ??= null; validation.promotionAudit ??= null; validation.ghostJournal ??= []; }
       this.data = {
         ...parsed,
         version: 4,

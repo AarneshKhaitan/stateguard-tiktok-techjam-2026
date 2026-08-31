@@ -121,6 +121,7 @@ export interface ValidationRecord {
   completedAt: string | null;
   reviewAcknowledgement: { actor: string; reason: string; acknowledgedAt: string } | null;
   promotionAudit: { actor: string; reason: string; promotedAt: string } | null;
+  ghostJournal: import("./ghost-replay.js").GhostEvent[];
 }
 
 export interface FileChange {
