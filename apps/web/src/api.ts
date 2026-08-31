@@ -63,7 +63,8 @@ export const api = {
   deleteAgent: (id: string) =>
     request<{ archivedWorkspace: string }>("/api/agents/" + id, {
       method: "DELETE",
-    }),
+  }),
+  forkAgent: (id: string, generationId?: string, name?: string) => request<{ agent: Agent }>("/api/agents/" + id + "/fork", { method: "POST", body: JSON.stringify({ generationId, name }) }),
   startAgent: (id: string) =>
     request<{ agent: Agent }>("/api/agents/" + id + "/start", {
       method: "POST",

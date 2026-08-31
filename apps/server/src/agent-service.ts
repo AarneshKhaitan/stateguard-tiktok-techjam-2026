@@ -144,6 +144,23 @@ export class AgentService {
     return { archivedWorkspace };
   }
 
+  async forkAgent(sourceId: string, generationId?: string, name?: string): Promise<Agent> {
+    const source = this.getAgent(sourceId);
+    const sourceGenerationPath = this.workspaces.generationPath(source, generationId ?? source.activeGenerationId);
+    const sourceRelease = this.store.snapshot().releases.find((release) => release.id === source.activeReleaseId);
+    if (!sourceRelease) throw new HttpError(409, "Source active release is missing");
+    const timestamp = now();
+    const id = randomUUID();
+    const fields = { name: name?.trim() || sourceRelease.name + " fork", description: sourceRelease.description, instructions: sourceRelease.instructions };
+    const release = createRelease(id, fields, 1, "active", null);
+    const agent: Agent = { id, ...fields, status: "ready", workspacePath: this.workspaces.workspacePath(id), activeGenerationId: "gen_0001", activeReleaseId: release.id, candidateReleaseId: null, policy: structuredClone(source.policy), codexThreadId: null, lastError: null, createdAt: timestamp, updatedAt: timestamp };
+    await this.workspaces.create(agent);
+    try { await this.workspaces.forkGeneration(sourceGenerationPath, agent); }
+    catch (error) { await this.workspaces.removeStaging(agent.workspacePath); throw error; }
+    await this.store.mutate((database) => { database.agents.push(agent); database.releases.push(release); });
+    return agent;
+  }
+
   getReleases(agentId: string): AgentRelease[] {
     this.getAgent(agentId);
     return this.store.snapshot().releases.filter((release) => release.agentId === agentId).sort((a, b) => b.version - a.version);

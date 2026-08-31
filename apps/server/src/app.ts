@@ -133,6 +133,12 @@ export async function createApp(
     return service.deleteAgent(id);
   });
 
+  app.post("/api/agents/:id/fork", async (request) => {
+    const { id } = agentIdParams.parse(request.params);
+    const body = z.object({ generationId: z.string().regex(/^gen_\d{4}$/).optional(), name: z.string().trim().min(1).max(80).optional() }).parse(request.body ?? {});
+    return { agent: await service.forkAgent(id, body.generationId, body.name) };
+  });
+
   app.post("/api/agents/:id/start", async (request) => {
     const { id } = agentIdParams.parse(request.params);
     return { agent: await service.startAgent(id) };

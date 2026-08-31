@@ -27,6 +27,12 @@ export class WorkspaceManager {
     await writeFile(path.join(generation, "README.md"), ["# " + agent.name + " workspace", "", "Files created or edited by the Agent live here.", ""].join("\n"), "utf8");
   }
 
+  async forkGeneration(sourceGenerationPath: string, targetAgent: Agent): Promise<void> {
+    const targetGeneration = this.generationPath(targetAgent, "gen_0001");
+    await rm(targetGeneration, { recursive: true, force: true });
+    await cp(sourceGenerationPath, targetGeneration, { recursive: true, force: false });
+  }
+
   async migrateAgent(agent: Agent): Promise<void> {
     const generation = this.generationPath(agent);
     try { await stat(generation); return; } catch (error) {
