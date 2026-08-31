@@ -28,7 +28,7 @@ describe("behavioural bisection", () => {
     await service.updateAgent(agent.id, { instructions: "first harmless change\n\nCULPRIT delete documentation\n\nthird harmless change" });
     const validation = await settle(service, agent.id); const result = await service.bisectValidation(validation.id, "docs/legacy.md");
     expect(result.inconclusive).toBe(false); expect(result.culpritSegments).toEqual(["CULPRIT delete documentation"]); expect(result.probes).toHaveLength(2); expect(result.probes.every((probe) => probe.runId)).toBe(true);
-    expect(service.getReleases(agent.id).every((release) => release.status !== "probe")).toBe(true); expect(service.getAgent(agent.id).codexThreadId).toBeNull(); expect(await readdir(path.join(agent.workspacePath, "staging"))).toEqual([]);
+    expect(service.getReleases(agent.id).every((release) => release.status !== "probe")).toBe(true); expect(service.getAgent(agent.id).codexThreadId).toBeNull(); expect((await readdir(path.join(agent.workspacePath, "staging"))).sort()).toEqual([]);
   });
 
   it("records inconclusive attribution evidence when the target did not reproduce", async () => {

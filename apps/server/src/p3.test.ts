@@ -60,7 +60,7 @@ describe("P3 differential validation", () => {
     expect(validation.differentialDeletions).toEqual(["docs/legacy-notes.md"]);
     expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
     expect(service.getAgent(agent.id).codexThreadId).toBeNull();
-    expect(await readdir(path.join(agent.workspacePath, "staging"))).toEqual([]);
+    expect((await readdir(path.join(agent.workspacePath, "staging"))).sort()).toEqual([]);
     expect(candidate.candidateReleaseId).not.toBeNull();
   });
 
@@ -79,19 +79,19 @@ describe("P3 differential validation", () => {
     const agent = await service.createAgent({ name: "Guard" });
     await mkdir(path.join(agent.workspacePath, "generations", "gen_0001", "docs"), { recursive: true });
     await writeFile(path.join(agent.workspacePath, "generations", "gen_0001", "docs", "legacy-notes.md"), "keep", "utf8");
-    const generationsBefore = await readdir(path.join(agent.workspacePath, "generations"));
+    const generationsBefore = (await readdir(path.join(agent.workspacePath, "generations"))).sort();
 
     // Certified path.
     await service.updateAgent(agent.id, { instructions: "Be careful" });
     expect((await settle(service, agent.id, "inspect")).status).toBe("certified");
-    expect(await readdir(path.join(agent.workspacePath, "staging"))).toEqual([]);
-    expect(await readdir(path.join(agent.workspacePath, "generations"))).toEqual(generationsBefore);
+    expect((await readdir(path.join(agent.workspacePath, "staging"))).sort()).toEqual([]);
+    expect((await readdir(path.join(agent.workspacePath, "generations"))).sort()).toEqual(generationsBefore);
 
     // Blocked path — the candidate deleted a file, which must not reach any generation.
     await service.updateAgent(agent.id, { instructions: "Be aggressive about cleanup" });
     expect((await settle(service, agent.id, "clean up")).status).toBe("review_required");
-    expect(await readdir(path.join(agent.workspacePath, "staging"))).toEqual([]);
-    expect(await readdir(path.join(agent.workspacePath, "generations"))).toEqual(generationsBefore);
+    expect((await readdir(path.join(agent.workspacePath, "staging"))).sort()).toEqual([]);
+    expect((await readdir(path.join(agent.workspacePath, "generations"))).sort()).toEqual(generationsBefore);
     expect(await readFile(path.join(agent.workspacePath, "generations", "gen_0001", "docs", "legacy-notes.md"), "utf8")).toBe("keep");
     expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
   });

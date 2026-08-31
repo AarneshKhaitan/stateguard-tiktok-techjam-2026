@@ -124,7 +124,7 @@ describe("Agent lifecycle", () => {
     expect(service.getRun(run.id).gateFailures).toEqual([{ code: "PROTECTED_PATH", reason: expect.stringContaining("config/production.json") }]);
     expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
     expect(service.getAgent(agent.id).codexThreadId).toBeNull();
-    expect(await readdir(path.join(agent.workspacePath, "staging"))).toEqual([]);
+    expect((await readdir(path.join(agent.workspacePath, "staging"))).sort()).toEqual([]);
     await expect(readFile(path.join(agent.workspacePath, "generations", "gen_0001", "config", "production.json"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
@@ -165,7 +165,7 @@ describe("Agent lifecycle", () => {
     expect(service.getRun(run.id).gateFailures).toEqual([{ code: "RUNTIME", reason: "fake runner failed" }]);
     expect(await Promise.all([".gitignore", "README.md"].map((file) => readFile(path.join(agent.workspacePath, "generations", "gen_0001", file))))).toEqual(baselineFiles);
     await expect(readFile(path.join(agent.workspacePath, "generations", "gen_0001", "partial.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await readdir(path.join(agent.workspacePath, "staging"))).toEqual([]);
+    expect((await readdir(path.join(agent.workspacePath, "staging"))).sort()).toEqual([]);
   });
 
   it("rolls back a cancelled execution and preserves the prior thread", async () => {
@@ -195,7 +195,7 @@ describe("Agent lifecycle", () => {
     expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
     expect(service.getAgent(agent.id).codexThreadId).toBe("original-thread");
     await expect(readFile(path.join(agent.workspacePath, "generations", "gen_0001", "cancelled.txt"), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await readdir(path.join(agent.workspacePath, "staging"))).toEqual([]);
+    expect((await readdir(path.join(agent.workspacePath, "staging"))).sort()).toEqual([]);
   });
 
   it("does not mint a generation for an empty diff", async () => {
@@ -204,7 +204,7 @@ describe("Agent lifecycle", () => {
     const { run } = await service.sendMessage(agent.id, "do nothing");
     await expect.poll(() => service.getRun(run.id).status, { timeout: 15_000, interval: 25 }).toBe("completed");
     expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
-    expect(await readdir(path.join(agent.workspacePath, "generations"))).toEqual(["gen_0001"]);
+    expect((await readdir(path.join(agent.workspacePath, "generations"))).sort()).toEqual(["gen_0001"]);
   });
 
   it("keeps ACTIVE on the old generation after a crash before pointer publication", async () => {
@@ -228,7 +228,7 @@ describe("Agent lifecycle", () => {
     );
     await restarted.initialize();
     expect(restarted.getAgent(agent.id).activeGenerationId).toBe("gen_0001");
-    expect(await readdir(path.join(agent.workspacePath, "generations"))).toEqual(["gen_0001", "gen_0002"]);
+    expect((await readdir(path.join(agent.workspacePath, "generations"))).sort()).toEqual(["gen_0001", "gen_0002"]);
     expect(await readFile(path.join(agent.workspacePath, "generations", "gen_0001", "README.md"), "utf8")).toContain("workspace");
   });
 
@@ -308,8 +308,8 @@ describe("Agent lifecycle", () => {
     // released cleanly between runs rather than leaking.
     expect(seenAgentIds).toEqual([agent.id, agent.id]);
     expect(service.getAgent(agent.id).activeGenerationId).toBe("gen_0003");
-    expect(await readdir(path.join(agent.workspacePath, "generations"))).toEqual(["gen_0001", "gen_0002", "gen_0003"]);
-    expect(await readdir(path.join(agent.workspacePath, "generations", "gen_0003"))).toEqual(expect.arrayContaining(["step1.txt", "step2.txt"]));
+    expect((await readdir(path.join(agent.workspacePath, "generations"))).sort()).toEqual(["gen_0001", "gen_0002", "gen_0003"]);
+    expect((await readdir(path.join(agent.workspacePath, "generations", "gen_0003"))).sort()).toEqual(expect.arrayContaining(["step1.txt", "step2.txt"]));
   });
 
   it("atomically accepts only one concurrent run per Agent", async () => {
