@@ -1120,3 +1120,26 @@ textarea:focus {
   font-size: 12px;
   padding: 6px 12px;
 }
+
+/* The validation task is a controlled fixture, not a chat message. Its only marker
+   used to be a placeholder, which never renders because the field is pre-filled —
+   so on screen it read as an unlabelled second input next to the playground. */
+.validation-task-label {
+  display: block;
+  margin: 16px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: #33373f;
+}
+
+.validation-task-label span {
+  display: block;
+  margin-top: 4px;
+  max-width: 70ch;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: #6b7280;
+}
+
+.validation-controls { margin-top: 8px; }
