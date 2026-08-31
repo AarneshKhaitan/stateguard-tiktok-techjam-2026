@@ -276,6 +276,20 @@ Known limitations are intentional and visible to the judge:
   implemented.
 - One execution of stochastic software is regression evidence, not proof of
   causation. The system reports what we observed in that execution.
+- **Ghost Replay is presentation, never evidence.** Its event journal is
+  explicitly non-authoritative: the manifest diff is what every gate decision is
+  made from. The journal also deliberately withholds file contents for
+  credential-shaped paths (`.env`, `*.key`, `*.pem`, `*secret*`, and similar),
+  for files over 64 KB, and once a 512 KB per-journal budget is spent, recording
+  the reason on the event. Withheld events still replay structurally. Contents
+  are withheld because the journal is persisted into the metadata store and
+  served to the browser, and neither may carry unredacted secrets.
+- **Canary rollout is opt-in and off by default.** It is the only feature that
+  touches the live Run path, so it is gated behind `CANARY_ENABLED`, which
+  accepts only affirmative values (`true`, `1`, `yes`, `on`, case-insensitive).
+  Anything else, including an unrecognised value, fails safe to off — the switch
+  exists so the canary can be taken off the live path in a hurry, which only
+  works if the obvious value actually disables it.
 
 Use this language precisely:
 

@@ -32,6 +32,29 @@ new destructive behavior visible anyway. In the recorded run, the baseline
 added `NOTES.md`, the candidate deleted `docs/legacy-notes.md`, both absolute
 gate lists were empty, and the differential gate returned that deletion.
 
+## Beyond the core guarantee
+
+Built on the same primitives, each independently tested:
+
+- **Instruction tamper detection.** `AGENTS.md` is hashed before and after every
+  execution. An Agent that deletes or rewrites the instructions it is judged
+  against fails an absolute gate — without this, every other gate is advisory.
+- **Trusted verification.** The verifier runs in its own container with no Ark
+  credential and no `codex-home` mount, and takes its command from server-side
+  policy, never the workspace. An Agent that rewrites `package.json` cannot fake
+  a pass.
+- **Tamper-evident ledger.** Every validation, promotion and refusal is an
+  append-only HMAC-signed record carrying the previous entry's hash. The signing
+  key is persisted, so restarts do not invalidate legitimate history.
+  Tamper-evident under the server-key trust assumption — not tamper-proof.
+- **Audited human override.** A blocked candidate can be acknowledged for review
+  and promoted only with a recorded actor and reason.
+- **Fork from a generation.** Any generation can be forked into an independent
+  Agent with a fresh session — recovery, not just refusal.
+- **Canary rollout with auto-rollback**, opt-in and off by default.
+- **Ghost Replay**, a non-authoritative visualisation of what a candidate would
+  have done, with credential-shaped and oversized file contents withheld.
+
 ## Technical stack
 
 - TypeScript, Fastify, React, Vite, Vitest
@@ -63,11 +86,23 @@ only the workspace path passed to the runner.
 
 ```powershell
 npm install
-npx vitest run --pool=forks --maxWorkers=1
-npm run typecheck
-npm run build
+npm run check   # typecheck, 60 tests, then both builds
 ```
+
+Test files run serially by configuration (`apps/server/vitest.config.ts`). The
+suite mixes container integration tests, whole-tree copy-and-hash work, and
+async flows polled against wall-clock deadlines; in parallel on a loaded host
+those fail intermittently and in a different place each run. Serial takes about
+a minute and is deterministic, which is what a verification suite is for.
 
 ## Team / track
 
 TikTok TechJam 2026 — Track 1, Agent Middleware.
+
+## Before submitting — fill these in
+
+- [ ] Public repository URL (replace the placeholder in "Architecture and repository")
+- [ ] Public YouTube demo video URL, ~3 minutes, tested in an incognito window
+- [ ] Team member names, with every member registered on **both** Devpost and the
+      registration form — only those registered on both are eligible
+- [ ] Submitted on Devpost before **1 September 2026, 12:00**
