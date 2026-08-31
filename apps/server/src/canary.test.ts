@@ -29,3 +29,20 @@ describe("feature-flagged canary rollback", () => {
     const rolledBack = service.getAgent(agent.id); expect(rolledBack.activeReleaseId).toBe(originalRelease); expect(rolledBack.codexThreadId).toBeNull(); expect(rolledBack.canaryRunsRemaining).toBe(0);
   });
 });
+
+describe("canary feature flag", () => {
+  it("treats CANARY_ENABLED=false as OFF", async () => {
+    const { loadConfig } = await import("./config.js");
+    const base = { NODE_ENV: "test" as const, ARK_API_KEY: "k", ARK_MODEL: "m" };
+    // z.coerce.boolean() is JS Boolean(), so every non-empty string is true and
+    // "false" would ENABLE the canary. The flag's entire purpose is that the obvious
+    // value switches off the live-Run path in a hurry.
+    for (const off of ["false", "FALSE", "0", "no", "off", "", "nonsense"]) {
+      expect(loadConfig({ ...base, CANARY_ENABLED: off }).canaryEnabled).toBe(false);
+    }
+    for (const on of ["true", "TRUE", "1", "yes", "on", " On "]) {
+      expect(loadConfig({ ...base, CANARY_ENABLED: on }).canaryEnabled).toBe(true);
+    }
+    expect(loadConfig(base).canaryEnabled).toBe(false);
+  });
+});

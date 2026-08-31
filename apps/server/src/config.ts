@@ -45,7 +45,17 @@ const envSchema = z.object({
   ARK_API_KEY: z.string().optional(),
   ARK_MODEL: z.string().optional(),
   CODEX_VERSION: z.string().default("0.111.0"),
-  CANARY_ENABLED: z.coerce.boolean().default(false),
+  // NOT z.coerce.boolean(): that is JS Boolean(), so every non-empty string is true
+  // and CANARY_ENABLED=false would ENABLE the canary. This flag exists so a late
+  // problem on the live Run path is one env var away from being switched off, which
+  // only works if the obvious value actually switches it off.
+  // Only affirmative values enable it; anything else — including an unrecognised
+  // value — fails safe to off, which is the right default for a switch whose job is
+  // to take the canary off the live Run path in a hurry.
+  CANARY_ENABLED: z
+    .string()
+    .default("false")
+    .transform((value) => ["true", "1", "yes", "on"].includes(value.trim().toLowerCase())),
   CANARY_RUNS: z.coerce.number().int().min(1).max(100).default(3),
   ARK_BASE_URL: z
     .string()
