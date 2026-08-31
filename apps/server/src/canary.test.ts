@@ -24,6 +24,7 @@ describe("feature-flagged canary rollback", () => {
     await expect.poll(() => service.getValidation(validation.id).status, { timeout: 15_000, interval: 25 }).toBe("certified");
     await service.promote(agent.id, validation.id); const promoted = service.getAgent(agent.id); expect(promoted.activeReleaseId).not.toBe(originalRelease);
     const first = await service.sendMessage(agent.id, "one"); await expect.poll(() => service.getRun(first.run.id).status, { timeout: 15_000, interval: 25 }).toBe("failed");
+    expect(service.getAgent(agent.id).canaryConsecutiveFailures).toBe(1);
     const second = await service.sendMessage(agent.id, "two"); await expect.poll(() => service.getRun(second.run.id).status, { timeout: 15_000, interval: 25 }).toBe("failed");
     const rolledBack = service.getAgent(agent.id); expect(rolledBack.activeReleaseId).toBe(originalRelease); expect(rolledBack.codexThreadId).toBeNull(); expect(rolledBack.canaryRunsRemaining).toBe(0);
   });

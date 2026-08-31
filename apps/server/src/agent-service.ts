@@ -24,6 +24,7 @@ import { newDestructiveDeletions } from "./differential.js";
 import { createValidationContext } from "./validation-context.js";
 import { referenceCacheKey } from "./reference-cache.js";
 import { Ledger } from "./ledger.js";
+import { buildGhostJournal } from "./ghost-replay.js";
 import path from "node:path";
 
 const now = () => new Date().toISOString();
@@ -204,6 +205,7 @@ export class AgentService {
       baselineGateFailures: [], candidateGateFailures: [], differentialDeletions: [], error: null,
       createdAt: now(), completedAt: null,
       reviewAcknowledgement: null, promotionAudit: null,
+      ghostJournal: [],
     };
     await this.store.mutate((db) => { db.validations.push(validation); const stored = db.agents.find((item) => item.id === agentId); if (stored) { stored.status = "busy"; stored.updatedAt = now(); } });
     // Fire-and-forget, exactly like sendMessage. A validation is two full Codex runs;
@@ -247,7 +249,7 @@ export class AgentService {
         const record = db.validations.find((item) => item.id === validation.id); const storedAgent = db.agents.find((item) => item.id === agent.id);
         if (!record || !storedAgent) return;
         record.status = baselineUnhealthy ? "baseline_unhealthy" : blocked ? "blocked" : "certified"; record.baselineDiff = first.diff; record.candidateDiff = second.diff;
-        record.baselineGateFailures = first.gates.failures; record.candidateGateFailures = second.gates.failures; record.differentialDeletions = differentialDeletions; record.completedAt = now();
+        record.baselineGateFailures = first.gates.failures; record.candidateGateFailures = second.gates.failures; record.differentialDeletions = differentialDeletions; record.ghostJournal = second.journal; record.completedAt = now();
         storedAgent.status = "ready"; storedAgent.updatedAt = now();
       });
       await this.ledger.append("validation", agent.id, { validationId: validation.id, status: baselineUnhealthy ? "baseline_unhealthy" : blocked ? "blocked" : "certified", differentialDeletions, baselineGateFailures: first.gates.failures, candidateGateFailures: second.gates.failures });
@@ -258,7 +260,7 @@ export class AgentService {
     }
   }
 
-  private async runValidationExecution(agent: Agent, release: AgentRelease, runId: string, task: string, basePath: string): Promise<{ diff: WorkspaceDiff; gates: ReturnType<typeof evaluateAbsoluteGates> }> {
+  private async runValidationExecution(agent: Agent, release: AgentRelease, runId: string, task: string, basePath: string): Promise<{ diff: WorkspaceDiff; gates: ReturnType<typeof evaluateAbsoluteGates>; journal: import("./ghost-replay.js").GhostEvent[] }> {
     const { stagingPath, agentsMdHash } = await this.workspaces.prepareStagingFrom(agent, runId, basePath, release);
     try {
       const result = await this.runner.run({ agentId: agent.id, workspacePath: stagingPath, prompt: task, threadId: null });
@@ -270,10 +272,11 @@ export class AgentService {
           : null;
       await this.workspaces.removeAgentsMd(stagingPath);
       const diff = await diffTrees(basePath, stagingPath, agent.activeGenerationId);
+      const journal = await buildGhostJournal(basePath, stagingPath, diff);
       let verification;
       try { verification = await this.verifier.run({ workspacePath: stagingPath, command: agent.policy.verificationCommand, agentId: agent.id, runId }); }
       catch (error) { verification = { passed: false, output: error instanceof Error ? error.message : String(error), exitCode: null }; }
-      return { diff, gates: evaluateAbsoluteGates(diff, agent.policy, verification, null, agentsTampered) };
+      return { diff, gates: evaluateAbsoluteGates(diff, agent.policy, verification, null, agentsTampered), journal };
     } finally { await this.workspaces.removeStaging(stagingPath); }
   }
 
@@ -524,6 +527,7 @@ export class AgentService {
         const gates = evaluateAbsoluteGates(diff, agentAtStart.policy, verification, null, agentsTampered);
         if (!gates.certified) {
           await this.workspaces.removeStaging(stagingPath);
+          await this.recordCanaryFailure(agentAtStart.id, run.id);
           const completedAt = now();
           await this.store.mutate((database) => {
             const storedRun = database.runs.find((item) => item.id === run.id);
@@ -537,7 +541,6 @@ export class AgentService {
             agent.lastError = null;
             agent.updatedAt = completedAt;
           });
-          await this.recordCanaryFailure(agentAtStart.id, run.id);
           return;
         }
         let nextGenerationId = agentAtStart.activeGenerationId;
