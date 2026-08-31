@@ -13,6 +13,7 @@ import type {
   UpdateAgentInput,
   GatePolicy,
   ValidationRecord,
+  BisectionResult,
   WorkspaceDiff,
   VerificationRunner,
 } from "./types.js";
@@ -29,6 +30,16 @@ import { BehaviouralHistory } from "./behavioural-history.js";
 import path from "node:path";
 
 const now = () => new Date().toISOString();
+
+function instructionSegments(instructions: string): string[] {
+  const paragraphs = instructions.split(/\r?\n\s*\r?\n/).map((part) => part.trim()).filter(Boolean);
+  return paragraphs.length > 1 ? paragraphs : instructions.split(/\r?\n/).map((part) => part.trim()).filter(Boolean);
+}
+
+function changedInstructionSegments(baseline: string, candidate: string): string[] {
+  const before = new Set(instructionSegments(baseline));
+  return instructionSegments(candidate).filter((segment) => !before.has(segment));
+}
 
 export class AgentService {
   private readonly activeExecutions = new Map<string, Promise<void>>();
@@ -217,6 +228,7 @@ export class AgentService {
       createdAt: now(), completedAt: null,
       reviewAcknowledgement: null, promotionAudit: null,
       ghostJournal: [],
+      bisection: null,
     };
     // Re-check inside the serialized mutation. The pre-flight above reads a snapshot,
     // so two concurrent validations — or a validation racing a sendMessage — could both
@@ -341,6 +353,35 @@ export class AgentService {
     const validation = this.store.snapshot().validations.find((item) => item.id === id);
     if (!validation) throw new HttpError(404, "Validation not found");
     return validation;
+  }
+
+  async bisectValidation(validationId: string, targetPath: string): Promise<BisectionResult> {
+    const validation = this.getValidation(validationId);
+    const agent = this.getAgent(validation.agentId);
+    if (agent.status === "busy") throw new HttpError(409, "Stop the active run before bisection");
+    const database = this.store.snapshot();
+    const baseline = database.releases.find((release) => release.releaseHash === validation.context.baselineReleaseHash);
+    const candidate = database.releases.find((release) => release.id === validation.candidateReleaseId);
+    if (!baseline || !candidate) throw new HttpError(409, "Bisection refused: validation releases are unavailable");
+    const changedSegments = changedInstructionSegments(baseline.instructions, candidate.instructions);
+    const targetPresent = validation.candidateDiff.changes.some((change) => change.kind === "deleted" && change.path === targetPath);
+    const result: BisectionResult = { validationId, targetEffect: { kind: "deleted", path: targetPath }, changedSegments, culpritSegments: [], probes: [], inconclusive: !targetPresent || changedSegments.length === 0, createdAt: now() };
+    if (!result.inconclusive) {
+      let remaining = changedSegments;
+      const basePath = this.workspaces.generationPath(agent, validation.context.generationId);
+      while (remaining.length > 1) {
+        const left = remaining.slice(0, Math.ceil(remaining.length / 2));
+        const probe = { ...baseline, id: "probe:" + randomUUID(), status: "probe" as const, instructions: [baseline.instructions, ...left].filter(Boolean).join("\n\n") };
+        const runId = randomUUID();
+        const execution = await this.runValidationExecution(agent, probe, runId, validation.task, basePath);
+        const reproduced = execution.diff.changes.some((change) => change.kind === "deleted" && change.path === targetPath);
+        result.probes.push({ segments: left, reproduced, runId });
+        remaining = reproduced ? left : remaining.slice(left.length);
+      }
+      result.culpritSegments = remaining;
+    }
+    await this.store.mutate((db) => { const record = db.validations.find((item) => item.id === validationId); if (!record) throw new HttpError(404, "Validation not found"); record.bisection = result; });
+    return result;
   }
 
   async acknowledgeValidation(id: string, actor: string, reason: string): Promise<ValidationRecord> {

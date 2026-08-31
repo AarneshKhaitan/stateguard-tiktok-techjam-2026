@@ -64,6 +64,10 @@ Built on the same primitives, each independently tested:
 
 ## Technical stack
 
+Behavioural bisection is also available on demand: it runs discarded ephemeral probes
+to isolate a minimal reproducing instruction subset. The result is honestly labelled
+attribution evidence and becomes inconclusive when the observed effect does not recur.
+
 - TypeScript, Fastify, React, Vite, Vitest
 - Volcengine Ark Responses API through Codex CLI
 - Docker Desktop runtime with a local-process-compatible runner seam

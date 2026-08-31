@@ -2,7 +2,7 @@ export type AgentStatus = "ready" | "busy" | "stopped" | "error";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type MessageRole = "user" | "assistant";
 export type GenerationId = string;
-export type ReleaseStatus = "active" | "candidate" | "retired";
+export type ReleaseStatus = "active" | "candidate" | "retired" | "probe";
 /** `baseline_unhealthy` means the ACTIVE release failed its own gates on this task and
  *  generation, so the candidate cannot be judged against it. Enforcement matches
  *  `blocked` — nothing is certified — but the blame is attributed correctly. */
@@ -135,6 +135,19 @@ export interface ValidationRecord {
   reviewAcknowledgement: { actor: string; reason: string; acknowledgedAt: string } | null;
   promotionAudit: { actor: string; reason: string; promotedAt: string } | null;
   ghostJournal: import("./ghost-replay.js").GhostEvent[];
+  bisection: BisectionResult | null;
+}
+
+/** Best-effort attribution evidence from isolated stochastic probes, never a
+ *  causal claim. `inconclusive` makes failed reproduction explicit. */
+export interface BisectionResult {
+  validationId: string;
+  targetEffect: { kind: "deleted"; path: string };
+  changedSegments: string[];
+  culpritSegments: string[];
+  probes: Array<{ segments: string[]; reproduced: boolean; runId: string }>;
+  inconclusive: boolean;
+  createdAt: string;
 }
 
 export interface FileChange {

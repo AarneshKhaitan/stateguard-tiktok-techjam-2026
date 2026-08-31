@@ -91,6 +91,7 @@ export const api = {
   validations: (id: string) => request<{ validations: ValidationRecord[] }>("/api/agents/" + id + "/validations"),
   validation: (id: string) => request<{ validation: ValidationRecord }>("/api/validations/" + id),
   acknowledge: (id: string, actor: string, reason: string) => request<{ validation: ValidationRecord }>("/api/validations/" + id + "/acknowledge", { method: "POST", body: JSON.stringify({ actor, reason }) }),
+  bisect: (id: string, path: string) => request<{ bisection: ValidationRecord["bisection"] }>("/api/validations/" + id + "/bisect", { method: "POST", body: JSON.stringify({ path }) }),
   promote: (id: string, validationId: string, actor?: string, reason?: string) => request<{ agent: Agent }>("/api/agents/" + id + "/promote", { method: "POST", body: JSON.stringify({ validationId, actor, reason }) }),
   run: (id: string) => request<{ run: AgentRun }>("/api/runs/" + id),
 };

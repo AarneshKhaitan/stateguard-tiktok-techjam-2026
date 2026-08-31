@@ -126,6 +126,14 @@ never appears in `candidateGateFailures`. Until `HISTORY_MIN_RECORDS` (five by d
 published records exist, it is explicitly informational; after that, it contributes to
 `REVIEW_REQUIRED` and requires the existing audited acknowledgement path.
 
+## Behavioural bisection
+
+An operator can diagnose an observed deletion with a binary search over changed
+instruction paragraphs (or lines when no paragraphs exist). Each probe is an
+in-memory `probe` release, runs in discarded staging with a fresh thread, and is never
+stored, listed, or promotable. Its result is attribution evidence, not causation; an
+effect that does not reproduce is explicitly marked `inconclusive`.
+
 The generation commit is **crash-safe, not atomic**: the rename and the ACTIVE
 pointer update are two operations, so a crash between them leaves a harmless
 orphaned generation, never a missing or corrupted one. The persistent workspace is

@@ -129,6 +129,12 @@ export async function createApp(
     return { validation: await service.acknowledgeValidation(id, body.actor, body.reason) };
   });
 
+  app.post("/api/validations/:id/bisect", async (request) => {
+    const { id } = runIdParams.parse(request.params);
+    const body = z.object({ path: z.string().trim().min(1).max(2_000) }).parse(request.body);
+    return { bisection: await service.bisectValidation(id, body.path) };
+  });
+
   app.post("/api/agents/:id/promote", async (request) => {
     const { id } = agentIdParams.parse(request.params);
     const body = z.object({ validationId: z.string().uuid().optional(), actor: z.string().trim().max(120).optional(), reason: z.string().trim().max(2_000).optional() }).parse(request.body ?? {});

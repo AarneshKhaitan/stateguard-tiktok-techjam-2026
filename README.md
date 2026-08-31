@@ -270,6 +270,12 @@ Novel effects require an audited review only after that threshold; they are neve
 absolute gate failures. The system records regression evidence from observed Runs; it
 does not claim that an instruction caused an effect.
 
+### Diagnose observed drift
+
+An operator can binary-search changed instruction paragraphs with discarded,
+fresh-thread probes. The resulting minimal subset is attribution evidence, not proof of
+causation; StateGuard marks it inconclusive when the observed deletion does not recur.
+
 Generations contain pure world state. `AGENTS.md` is platform-managed,
 synthesized into staging only, hashed, and stripped before diffing. The trusted
 verifier is outside Agent control and reads its command from server-side policy.
