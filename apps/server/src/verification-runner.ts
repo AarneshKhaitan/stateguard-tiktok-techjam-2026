@@ -20,7 +20,7 @@ export function buildVerificationRunArgs(request: VerificationRequest, config: A
       { agentId: request.agentId, workspacePath: request.workspacePath },
       config,
       verificationContainerName(config.runtimeInstanceId, request.agentId, request.runId),
-      { includeArk: false, includeCodexHome: false },
+      { includeArk: false, includeCodexHome: false, readonlyWorkspace: true },
     ),
     "sh", "-c", request.command,
   ];

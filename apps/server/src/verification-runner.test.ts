@@ -32,7 +32,7 @@ const request = (workspacePath: string, command: string, agentId = "agent-a", ru
 describe("independent verification runner", () => {
   it("mounts only the staging workspace and never includes Ark or Codex home", () => {
     const args = buildVerificationRunArgs(request("/tmp/staging", "sh -c 'exit 1'"), config());
-    expect(args).toContain("type=bind,src=/tmp/staging,dst=/workspace");
+    expect(args).toContain("type=bind,src=/tmp/staging,dst=/workspace,readonly");
     expect(args.join(" ")).not.toContain("ARK_API_KEY");
     expect(args.join(" ")).not.toContain("codex-home");
     expect(args.slice(-3)).toEqual(["sh", "-c", "sh -c 'exit 1'"]);

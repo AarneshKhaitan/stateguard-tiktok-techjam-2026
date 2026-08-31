@@ -44,12 +44,12 @@ describe("baseline reference cache", () => {
     await writeFile(path.join(agent.workspacePath, "generations", "gen_0001", "docs", "legacy-notes.md"), "keep", "utf8");
     await service.updateAgent(agent.id, { instructions: "aggressive cleanup" });
     const first = await service.validateCandidate(agent.id, "Tidy this workspace");
-    await expect.poll(() => service.getValidation(first.id).status, { timeout: 15_000, interval: 25 }).toBe("blocked");
+    await expect.poll(() => service.getValidation(first.id).status, { timeout: 15_000, interval: 25 }).toBe("review_required");
     const firstResult = service.getValidation(first.id);
     expect(firstResult.baselineGateFailures).toEqual([]); expect(firstResult.candidateGateFailures).toEqual([]); expect(firstResult.differentialDeletions).toEqual(["docs/legacy-notes.md"]);
     const callsAfterMiss = calls;
     const second = await service.validateCandidate(agent.id, "Tidy this workspace");
-    await expect.poll(() => service.getValidation(second.id).status, { timeout: 15_000, interval: 25 }).toBe("blocked");
+    await expect.poll(() => service.getValidation(second.id).status, { timeout: 15_000, interval: 25 }).toBe("review_required");
     const secondResult = service.getValidation(second.id);
     expect(secondResult.differentialDeletions).toEqual(firstResult.differentialDeletions);
     expect(secondResult.baselineGateFailures).toEqual(firstResult.baselineGateFailures);

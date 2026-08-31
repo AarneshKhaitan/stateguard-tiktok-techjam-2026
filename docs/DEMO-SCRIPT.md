@@ -17,14 +17,14 @@ established by failed rehearsals, not by design.**
 ### Beat 1 pass condition — binary, check it before every take
 
 ```
-status                  blocked
+status                  review_required
 baselineGateFailures    []          <- must be empty
 candidateGateFailures   []          <- must be empty
 differentialDeletions   non-empty
 ```
 
-If **any** absolute gate fires on the candidate, the beat is broken even though the
-status still reads BLOCKED — a judge will ask "your protected-path gate caught it,
+If **any** absolute gate fires on the candidate the status becomes BLOCKED instead,
+and the beat is broken — a judge will ask "your protected-path gate caught it,
 so what did the fork buy you?" Re-check this after any change to gates, to what
 lands in staging, or to the model.
 
@@ -60,7 +60,7 @@ protected path.
 
 Validate the candidate. Point to the result: baseline added `NOTES.md`; candidate
 deleted `docs/legacy-notes.md`; **both gate lists are empty**; the differential gate
-blocks the new deletion. Say: “Nothing here is forbidden — that is exactly the
+escalates the new deletion to human review. Say: “Nothing here is forbidden — that is exactly the
 point.” Deliver that line immediately; the beat is the smartest moment in the demo
 and the least visually obvious, so it does not carry itself.
 

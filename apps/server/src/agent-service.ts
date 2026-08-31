@@ -244,15 +244,22 @@ export class AgentService {
       // gets its own status. Enforcement is the same — nothing is certified against an
       // unhealthy baseline — but the stated reason is honest.
       const baselineUnhealthy = first.gates.failures.length > 0;
-      const blocked = second.gates.failures.length > 0 || differentialDeletions.length > 0;
+      // An absolute gate failure and behavioural drift are NOT the same outcome, and
+      // collapsing both into `blocked` made a hard invariant overridable: a
+      // PROTECTED_PATH violation could be acknowledged into review_required and then
+      // promoted. An absolute gate encodes something forbidden and is never
+      // reviewable. A new deletion is not forbidden — that is the entire point of the
+      // differential — so it escalates to a human with a recorded actor and reason.
+      const blocked = second.gates.failures.length > 0;
+      const reviewRequired = !blocked && differentialDeletions.length > 0;
       await this.store.mutate((db) => {
         const record = db.validations.find((item) => item.id === validation.id); const storedAgent = db.agents.find((item) => item.id === agent.id);
         if (!record || !storedAgent) return;
-        record.status = baselineUnhealthy ? "baseline_unhealthy" : blocked ? "blocked" : "certified"; record.baselineDiff = first.diff; record.candidateDiff = second.diff;
+        record.status = baselineUnhealthy ? "baseline_unhealthy" : blocked ? "blocked" : reviewRequired ? "review_required" : "certified"; record.baselineDiff = first.diff; record.candidateDiff = second.diff;
         record.baselineGateFailures = first.gates.failures; record.candidateGateFailures = second.gates.failures; record.differentialDeletions = differentialDeletions; record.ghostJournal = second.journal; record.completedAt = now();
         storedAgent.status = "ready"; storedAgent.updatedAt = now();
       });
-      await this.ledger.append("validation", agent.id, { validationId: validation.id, status: baselineUnhealthy ? "baseline_unhealthy" : blocked ? "blocked" : "certified", differentialDeletions, baselineGateFailures: first.gates.failures, candidateGateFailures: second.gates.failures });
+      await this.ledger.append("validation", agent.id, { validationId: validation.id, status: baselineUnhealthy ? "baseline_unhealthy" : blocked ? "blocked" : reviewRequired ? "review_required" : "certified", differentialDeletions, baselineGateFailures: first.gates.failures, candidateGateFailures: second.gates.failures });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.store.mutate((db) => { const record = db.validations.find((item) => item.id === validation.id); const storedAgent = db.agents.find((item) => item.id === agent.id); if (record) { record.status = "failed"; record.error = message; record.completedAt = now(); } if (storedAgent) { storedAgent.status = "error"; storedAgent.lastError = message; storedAgent.updatedAt = now(); } });
@@ -299,8 +306,14 @@ export class AgentService {
     return this.store.mutate((database) => {
       const validation = database.validations.find((item) => item.id === id);
       if (!validation) throw new HttpError(404, "Validation not found");
-      if (validation.status !== "blocked") throw new HttpError(409, `Acknowledgement refused: validation is ${validation.status}`);
-      validation.status = "review_required";
+      // Only behavioural drift is reviewable. A `blocked` validation failed an
+      // absolute gate — a protected path, verification, the change budget, instruction
+      // tampering — and those encode things that are forbidden outright. Allowing
+      // acknowledgement to convert `blocked` into `review_required` made every hard
+      // invariant overridable by anyone willing to type a reason.
+      if (validation.status !== "review_required") {
+        throw new HttpError(409, `Acknowledgement refused: validation is ${validation.status}; only flagged behavioural drift is reviewable`);
+      }
       validation.reviewAcknowledgement = { actor: actor.trim(), reason: reason.trim(), acknowledgedAt: now() };
       return structuredClone(validation);
     });

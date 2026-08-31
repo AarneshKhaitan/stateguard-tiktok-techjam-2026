@@ -48,13 +48,13 @@ async function settle(service: AgentService, agentId: string, task: string) {
 }
 
 describe("P3 differential validation", () => {
-  it("blocks a new deletion even when every absolute gate passes", async () => {
+  it("escalates a new deletion to review when every absolute gate passes", async () => {
     const service = await makeService(); const agent = await service.createAgent({ name: "Guard" });
     await mkdir(path.join(agent.workspacePath, "generations", "gen_0001", "docs"), { recursive: true });
     await writeFile(path.join(agent.workspacePath, "generations", "gen_0001", "docs", "legacy-notes.md"), "keep", "utf8");
     const candidate = await service.updateAgent(agent.id, { instructions: "Be aggressive about cleanup" });
     const validation = await settle(service, agent.id, "clean up");
-    expect(validation.status).toBe("blocked");
+    expect(validation.status).toBe("review_required");
     expect(validation.baselineGateFailures).toEqual([]);
     expect(validation.candidateGateFailures).toEqual([]);
     expect(validation.differentialDeletions).toEqual(["docs/legacy-notes.md"]);
@@ -89,7 +89,7 @@ describe("P3 differential validation", () => {
 
     // Blocked path — the candidate deleted a file, which must not reach any generation.
     await service.updateAgent(agent.id, { instructions: "Be aggressive about cleanup" });
-    expect((await settle(service, agent.id, "clean up")).status).toBe("blocked");
+    expect((await settle(service, agent.id, "clean up")).status).toBe("review_required");
     expect(await readdir(path.join(agent.workspacePath, "staging"))).toEqual([]);
     expect(await readdir(path.join(agent.workspacePath, "generations"))).toEqual(generationsBefore);
     expect(await readFile(path.join(agent.workspacePath, "generations", "gen_0001", "docs", "legacy-notes.md"), "utf8")).toBe("keep");

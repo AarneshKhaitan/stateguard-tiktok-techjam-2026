@@ -21,13 +21,49 @@ describe("review acknowledgement", () => {
     await service.initialize(); const agent = await service.createAgent({ name: "Guard" });
     await mkdir(path.join(agent.workspacePath, "generations", "gen_0001", "docs"), { recursive: true }); await writeFile(path.join(agent.workspacePath, "generations", "gen_0001", "docs", "legacy-notes.md"), "keep", "utf8");
     await service.updateAgent(agent.id, { instructions: "flagged cleanup" }); const started = await service.validateCandidate(agent.id, "tidy");
-    await expect.poll(() => service.getValidation(started.id).status, { timeout: 15_000, interval: 25 }).toBe("blocked");
-    await expect(service.promote(agent.id, started.id)).rejects.toThrow(/validation is blocked/);
+    // Behavioural drift escalates to review; it is not a hard block, because deleting
+    // an unprotected file is not forbidden — it is merely new.
+    await expect.poll(() => service.getValidation(started.id).status, { timeout: 15_000, interval: 25 }).toBe("review_required");
+    await expect(service.promote(agent.id, started.id)).rejects.toThrow(/actor and reason/);
     const acknowledged = await service.acknowledgeValidation(started.id, "operator-1", "Reviewed the deletion for this controlled migration");
     expect(acknowledged.status).toBe("review_required"); expect(acknowledged.reviewAcknowledgement?.actor).toBe("operator-1");
     await expect(service.promote(agent.id, started.id)).rejects.toThrow(/actor and reason/);
     const promoted = await service.promote(agent.id, started.id, "operator-1", "Approved after review");
     expect(promoted.activeReleaseId).toBe(acknowledged.candidateReleaseId); expect(promoted.activeGenerationId).toBe("gen_0001");
     const record = service.getValidation(started.id); expect(record.promotionAudit?.actor).toBe("operator-1"); expect(record.promotionAudit?.reason).toBe("Approved after review");
+  });
+
+  it("never lets an absolute gate failure be acknowledged or promoted", async () => {
+    // Collapsing absolute-gate failures and behavioural drift into one `blocked`
+    // status made every hard invariant overridable: a PROTECTED_PATH violation could
+    // be acknowledged into review_required and then promoted by anyone willing to
+    // type a reason. An absolute gate encodes something forbidden outright.
+    const root = await mkdtemp(path.join(tmpdir(), "stateguard-hardblock-")); roots.push(root);
+    const config = loadConfig({ NODE_ENV: "test", APP_DATA_DIR: path.join(root, "data"), AGENT_WORKSPACE_ROOT: path.join(root, "workspaces"), CODEX_HOME: path.join(root, "codex"), ARK_API_KEY: "test", ARK_MODEL: "ep-test" });
+    const runner: AgentRunner = {
+      async run(request) {
+        const instructions = await readFile(path.join(request.workspacePath, "AGENTS.md"), "utf8");
+        if (instructions.includes("PURGE-CUSTOMERS")) await rm(path.join(request.workspacePath, "data", "customers.json"), { force: true });
+        return { output: "ok", threadId: null, usage: null };
+      },
+      async cancel() { return false; }, async isAvailable() { return true; },
+    };
+    const verifier: VerificationRunner = { async run() { return { passed: true, output: "ok", exitCode: 0 }; } };
+    const service = new AgentService(config, new JsonStore(path.join(root, "data", "db.json")), new WorkspaceManager(path.join(root, "workspaces")), runner, verifier);
+    await service.initialize();
+    const agent = await service.createAgent({ name: "Guard" });
+    await mkdir(path.join(agent.workspacePath, "generations", "gen_0001", "data"), { recursive: true });
+    await writeFile(path.join(agent.workspacePath, "generations", "gen_0001", "data", "customers.json"), "{}", "utf8");
+    await service.updatePolicy(agent.id, { protectedPaths: ["data/customers.json"], verificationCommand: "exit 0", changeBudget: 20 });
+
+    await service.updateAgent(agent.id, { instructions: "PURGE-CUSTOMERS now" });
+    const started = await service.validateCandidate(agent.id, "tidy");
+    await expect.poll(() => service.getValidation(started.id).status, { timeout: 15_000, interval: 25 }).toBe("blocked");
+    expect(service.getValidation(started.id).candidateGateFailures.map((failure) => failure.code)).toContain("PROTECTED_PATH");
+
+    await expect(service.acknowledgeValidation(started.id, "operator-1", "please let me through")).rejects.toThrow(/only flagged behavioural drift is reviewable/);
+    await expect(service.promote(agent.id, started.id, "operator-1", "please let me through")).rejects.toThrow(/validation is blocked/);
+    expect(service.getValidation(started.id).status).toBe("blocked");
+    expect(service.getAgent(agent.id).activeReleaseId).not.toBe(service.getValidation(started.id).candidateReleaseId);
   });
 });

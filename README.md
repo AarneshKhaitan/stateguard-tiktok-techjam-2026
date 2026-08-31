@@ -262,6 +262,22 @@ Generations contain pure world state. `AGENTS.md` is platform-managed,
 synthesized into staging only, hashed, and stripped before diffing. The trusted
 verifier is outside Agent control and reads its command from server-side policy.
 
+**Absolute gates and behavioural drift are separate outcomes, and only one is
+reviewable.** An absolute gate — protected path, verification, change budget,
+instruction tampering, runtime failure — encodes something forbidden outright, so
+it produces `BLOCKED`, which cannot be acknowledged or promoted by anyone. A new
+destructive effect absent from the baseline is *not* forbidden; that is the entire
+point of the differential. It produces `REVIEW_REQUIRED`, which a human can promote
+only with a recorded actor and reason. Collapsing the two would make every hard
+invariant overridable by anyone willing to type a justification.
+
+**The verifier mounts the workspace read-only.** It runs after the authoritative
+diff is computed and before the generation is published, so a writable mount would
+let a test or build command deposit files that get committed without ever appearing
+in the diff or counting against the change budget. The verifier observes the subject
+under test; it cannot alter it. A verification command that needs to write is
+therefore out of scope by design.
+
 The generation commit is **crash-safe, NOT ATOMIC**: `rename(staging ->
 gen_NNNN)` and the ACTIVE-pointer update are two operations. A crash between
 them can leave a harmless orphaned generation, never a missing or corrupted
