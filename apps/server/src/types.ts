@@ -30,6 +30,9 @@ export interface Agent {
   activeGenerationId: GenerationId;
   activeReleaseId: string;
   candidateReleaseId: string | null;
+  canaryPreviousReleaseId: string | null;
+  canaryRunsRemaining: number;
+  canaryConsecutiveFailures: number;
   policy: GatePolicy;
   codexThreadId: string | null;
   lastError: string | null;

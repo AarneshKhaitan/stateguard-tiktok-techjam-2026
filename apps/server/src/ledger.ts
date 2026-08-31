@@ -4,7 +4,7 @@ import path from "node:path";
 
 export interface LedgerEntry {
   id: string;
-  kind: "validation" | "promotion" | "promotion_refusal";
+  kind: "validation" | "promotion" | "promotion_refusal" | "canary_rollback";
   agentId: string;
   details: Record<string, unknown>;
   createdAt: string;

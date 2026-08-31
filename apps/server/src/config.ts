@@ -45,6 +45,8 @@ const envSchema = z.object({
   ARK_API_KEY: z.string().optional(),
   ARK_MODEL: z.string().optional(),
   CODEX_VERSION: z.string().default("0.111.0"),
+  CANARY_ENABLED: z.coerce.boolean().default(false),
+  CANARY_RUNS: z.coerce.number().int().min(1).max(100).default(3),
   ARK_BASE_URL: z
     .string()
     .url()
@@ -93,6 +95,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     arkApiKey: env.ARK_API_KEY?.trim() ?? "",
     arkModel: env.ARK_MODEL?.trim() ?? "",
     codexVersion: env.CODEX_VERSION,
+    canaryEnabled: env.CANARY_ENABLED,
+    canaryRuns: env.CANARY_RUNS,
     arkBaseUrl: env.ARK_BASE_URL.replace(/\/+$/, ""),
     nodeEnv: env.NODE_ENV,
   };

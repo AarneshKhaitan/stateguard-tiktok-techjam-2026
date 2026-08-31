@@ -92,7 +92,7 @@ export class AgentService {
       workspacePath: this.workspaces.workspacePath(id),
       activeGenerationId: "gen_0001",
       activeReleaseId: release.id,
-      candidateReleaseId: null,
+      candidateReleaseId: null, canaryPreviousReleaseId: null, canaryRunsRemaining: 0, canaryConsecutiveFailures: 0,
       policy: defaultGatePolicy(),
       codexThreadId: null,
       lastError: null,
@@ -159,7 +159,7 @@ export class AgentService {
     const id = randomUUID();
     const fields = { name: name?.trim() || sourceRelease.name + " fork", description: sourceRelease.description, instructions: sourceRelease.instructions };
     const release = createRelease(id, fields, 1, "active", null);
-    const agent: Agent = { id, ...fields, status: "ready", workspacePath: this.workspaces.workspacePath(id), activeGenerationId: "gen_0001", activeReleaseId: release.id, candidateReleaseId: null, policy: structuredClone(source.policy), codexThreadId: null, lastError: null, createdAt: timestamp, updatedAt: timestamp };
+    const agent: Agent = { id, ...fields, status: "ready", workspacePath: this.workspaces.workspacePath(id), activeGenerationId: "gen_0001", activeReleaseId: release.id, candidateReleaseId: null, canaryPreviousReleaseId: null, canaryRunsRemaining: 0, canaryConsecutiveFailures: 0, policy: structuredClone(source.policy), codexThreadId: null, lastError: null, createdAt: timestamp, updatedAt: timestamp };
     await this.workspaces.create(agent);
     try { await this.workspaces.forkGeneration(sourceGenerationPath, agent); }
     catch (error) { await this.workspaces.removeStaging(agent.workspacePath); throw error; }
@@ -340,6 +340,9 @@ export class AgentService {
       candidate.status = "active";
       agent.activeReleaseId = candidate.id;
       agent.candidateReleaseId = null;
+      agent.canaryPreviousReleaseId = previousActive?.id ?? null;
+      agent.canaryRunsRemaining = this.config.canaryEnabled ? this.config.canaryRuns : 0;
+      agent.canaryConsecutiveFailures = 0;
       agent.codexThreadId = null;
       agent.name = candidate.name; agent.description = candidate.description; agent.instructions = candidate.instructions;
       if (validation.status === "review_required") validation.promotionAudit = { actor: actor!.trim(), reason: reason!.trim(), promotedAt: now() };
@@ -534,6 +537,7 @@ export class AgentService {
             agent.lastError = null;
             agent.updatedAt = completedAt;
           });
+          await this.recordCanaryFailure(agentAtStart.id, run.id);
           return;
         }
         let nextGenerationId = agentAtStart.activeGenerationId;
@@ -553,6 +557,11 @@ export class AgentService {
           agent.status = "ready";
           agent.activeGenerationId = nextGenerationId;
           agent.codexThreadId = result.threadId;
+          if (this.config.canaryEnabled && agent.canaryRunsRemaining > 0) {
+            agent.canaryRunsRemaining -= 1;
+            agent.canaryConsecutiveFailures = 0;
+            if (agent.canaryRunsRemaining === 0) agent.canaryPreviousReleaseId = null;
+          }
           agent.lastError = null;
           agent.updatedAt = completedAt;
         });
@@ -583,7 +592,26 @@ export class AgentService {
           agent.updatedAt = completedAt;
         }
       });
+      if (!cancelled) await this.recordCanaryFailure(agentAtStart.id, run.id);
     }
+  }
+
+  private async recordCanaryFailure(agentId: string, runId: string): Promise<void> {
+    if (!this.config.canaryEnabled) return;
+    const rollback = await this.store.mutate((database) => {
+      const agent = database.agents.find((item) => item.id === agentId);
+      if (!agent || agent.canaryRunsRemaining <= 0) return null;
+      agent.canaryRunsRemaining -= 1; agent.canaryConsecutiveFailures += 1;
+      if (agent.canaryConsecutiveFailures < 2 || !agent.canaryPreviousReleaseId) return null;
+      const current = database.releases.find((release) => release.id === agent.activeReleaseId);
+      const previous = database.releases.find((release) => release.id === agent.canaryPreviousReleaseId);
+      if (!previous) return null;
+      if (current) current.status = "retired"; previous.status = "active";
+      agent.activeReleaseId = previous.id; agent.name = previous.name; agent.description = previous.description; agent.instructions = previous.instructions;
+      agent.candidateReleaseId = null; agent.canaryPreviousReleaseId = null; agent.canaryRunsRemaining = 0; agent.canaryConsecutiveFailures = 0; agent.codexThreadId = null; agent.updatedAt = now();
+      return { previousReleaseId: previous.id, failedRunId: runId };
+    });
+    if (rollback) await this.ledger.append("canary_rollback", agentId, rollback);
   }
 
   private async setStatus(id: string, status: Agent["status"]): Promise<Agent> {
