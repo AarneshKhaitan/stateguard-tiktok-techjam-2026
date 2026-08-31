@@ -220,16 +220,21 @@ export default function App() {
     finally { setBusy(false); }
   };
 
-  const attachToWorld = async () => {
-    if (!selected) return;
-    // Two Agents in one world is what makes a write-write conflict possible at all.
-    const worldId = window.prompt('Attach this Agent to which world id?', selected.worldId) ?? '';
-    if (!worldId || worldId === selected.worldId) return;
+  // Two Agents in one world is what makes a write-write conflict possible at all.
+  // Picked from the other Agents rather than typed: the summary line only shows the
+  // first eight characters of a world id, so a free-text prompt was unusable.
+  const attachToWorld = async (targetAgentId: string) => {
+    if (!selected || !targetAgentId) return;
+    const target = agents.find((agent) => agent.id === targetAgentId);
+    if (!target || target.worldId === selected.worldId) return;
     setBusy(true); setError(null);
     try {
-      await api.attachWorld(selected.id, worldId);
+      await api.attachWorld(selected.id, target.worldId);
       await refreshAgents();
-      setPromotionMessage('Attached to world ' + worldId.slice(0, 8) + '. Concurrent Runs now share one immutable world under snapshot isolation.');
+      setPromotionMessage(
+        `${selected.name} now shares ${target.name}'s world (${target.worldId.slice(0, 8)}). ` +
+        "Concurrent Runs commit under snapshot isolation, first-committer-wins.",
+      );
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { setBusy(false); }
   };
@@ -593,7 +598,28 @@ export default function App() {
               <div className="playground-topbar"><div><span className="eyebrow">StateGuard control plane</span><h2>Releases and validation</h2></div><span className="session-info">ACTIVE {selected.activeGenerationId}</span></div>
               <div className="release-summary"><span>World: {selected.worldId.slice(0, 8)} · {selected.activeGenerationId}</span><span>Active release: v{releases.find((item) => item.id === selected.activeReleaseId)?.version ?? "—"} · {selected.activeReleaseId.slice(0, 8)}</span><span>Candidate: {selected.candidateReleaseId ? "v" + (releases.find((item) => item.id === selected.candidateReleaseId)?.version ?? "—") : "none"}</span><span>Protected: {selected.policy.protectedPaths.join(", ") || "none"}</span></div>
               <div className="world-controls">
-                <button className="button button-ghost" onClick={attachToWorld} disabled={busy} title="Put two Agents in one immutable world. Concurrent Runs then commit under snapshot isolation, first-committer-wins.">Attach to world…</button>
+                {agents.filter((agent) => agent.id !== selected.id && agent.worldId !== selected.worldId).length > 0 ? (
+                  <select
+                    className="world-select"
+                    value=""
+                    disabled={busy}
+                    onChange={(event) => void attachToWorld(event.target.value)}
+                    title="Put two Agents in one immutable world. Concurrent Runs then commit under snapshot isolation, first-committer-wins."
+                  >
+                    <option value="">Join another Agent's world…</option>
+                    {agents
+                      .filter((agent) => agent.id !== selected.id && agent.worldId !== selected.worldId)
+                      .map((agent) => (
+                        <option key={agent.id} value={agent.id}>
+                          {agent.name} · {agent.worldId.slice(0, 8)} · {agent.activeGenerationId}
+                        </option>
+                      ))}
+                  </select>
+                ) : (
+                  <span className="world-hint">
+                    {agents.length < 2 ? "Create a second Agent to share this world" : "Sharing a world with another Agent"}
+                  </span>
+                )}
                 <button className="button button-ghost" onClick={forkGeneration} disabled={busy} title="Copy a generation into an independent Agent with a fresh session.">Fork generation…</button>
                 <button className="button button-ghost" onClick={verifyLedger} title="Recompute the hash chain and every entry signature.">Verify ledger</button>
               </div>

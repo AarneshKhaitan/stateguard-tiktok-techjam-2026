@@ -1143,3 +1143,19 @@ textarea:focus {
 }
 
 .validation-controls { margin-top: 8px; }
+
+.world-select {
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #d9dbe2;
+  background: #fff;
+  color: #33373f;
+  cursor: pointer;
+}
+
+.world-hint {
+  font-size: 12px;
+  color: #6b7280;
+  align-self: center;
+}
