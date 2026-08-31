@@ -45,9 +45,28 @@ export class Ledger {
     this.queue = operation.catch(() => undefined); await operation; return result;
   }
 
+  /**
+   * Verifies what is ON DISK, not what is in memory.
+   *
+   * The whole point of a tamper-evident ledger is to detect edits to the durable
+   * record. Checking the in-process copy would pass happily while `ledger.json`
+   * says something else entirely — the file is what survives, and the file is what
+   * an auditor reads. Re-reading also means the check works on a running server,
+   * rather than only after a restart.
+   */
   async verify(): Promise<void> {
+    let onDisk: LedgerEntry[];
+    try { onDisk = JSON.parse(await readFile(this.filePath, "utf8")) as LedgerEntry[]; }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return; // nothing written yet
+      throw new Error("Ledger file is unreadable or not valid JSON: " + (error as Error).message);
+    }
+    if (!Array.isArray(onDisk)) throw new Error("Ledger file is not an array of entries");
+    if (onDisk.length < this.entries.length) {
+      throw new Error(`Ledger truncated: ${this.entries.length} entries recorded, ${onDisk.length} on disk`);
+    }
     let previousHash = "";
-    for (const [index, entry] of this.entries.entries()) {
+    for (const [index, entry] of onDisk.entries()) {
       const { hash, signature, ...payload } = entry;
       if (entry.previousHash !== previousHash) throw new Error(`Ledger entry ${entry.id} invalid at position ${index}: previous hash mismatch`);
       const expectedSignature = createHmac("sha256", this.key).update(canonical(payload)).digest("hex");

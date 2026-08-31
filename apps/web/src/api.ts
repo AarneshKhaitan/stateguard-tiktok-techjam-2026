@@ -94,4 +94,6 @@ export const api = {
   bisect: (id: string, path: string) => request<{ bisection: ValidationRecord["bisection"] }>("/api/validations/" + id + "/bisect", { method: "POST", body: JSON.stringify({ path }) }),
   promote: (id: string, validationId: string, actor?: string, reason?: string) => request<{ agent: Agent }>("/api/agents/" + id + "/promote", { method: "POST", body: JSON.stringify({ validationId, actor, reason }) }),
   run: (id: string) => request<{ run: AgentRun }>("/api/runs/" + id),
+  attachWorld: (id: string, worldId: string) => request<{ agent: Agent }>("/api/agents/" + id + "/world", { method: "POST", body: JSON.stringify({ worldId }) }),
+  verifyLedger: () => request<{ valid: boolean; reason: string | null }>("/api/ledger/verify"),
 };

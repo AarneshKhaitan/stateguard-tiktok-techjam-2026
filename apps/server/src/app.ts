@@ -152,7 +152,16 @@ export async function createApp(
     return { agent: await service.promote(id, body.validationId, body.actor, body.reason) };
   });
 
-  app.get("/api/ledger/verify", async () => { await service.verifyLedger(); return { valid: true }; });
+  // A detected tamper is a successful verification, not a server fault. Returning 500
+  // would read as "the app crashed" when in fact the mechanism did its job.
+  app.get("/api/ledger/verify", async () => {
+    try {
+      await service.verifyLedger();
+      return { valid: true, reason: null };
+    } catch (error) {
+      return { valid: false, reason: error instanceof Error ? error.message : String(error) };
+    }
+  });
 
   app.delete("/api/agents/:id", async (request) => {
     const { id } = agentIdParams.parse(request.params);

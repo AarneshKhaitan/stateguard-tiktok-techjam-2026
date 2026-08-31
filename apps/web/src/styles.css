@@ -1105,3 +1105,18 @@ textarea:focus {
 .validation-blocked, .validation-failed { color: #9c2d28; background: #fff0ef; }
 .field-hint { display: block; font-size: 11px; color: #777; margin-top: 4px; }
 .promotion-message { margin-top: 12px; padding: 12px; border-left: 3px solid #6954d9; background: #f2efff; color: #40337d; }
+
+/* Control-plane actions that are not part of the validate/promote flow:
+   attaching two Agents to one world, forking a generation, and verifying the
+   ledger. Kept visually secondary so the primary path stays obvious. */
+.world-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.world-controls .button {
+  font-size: 12px;
+  padding: 6px 12px;
+}

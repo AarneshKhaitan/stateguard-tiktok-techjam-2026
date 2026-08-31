@@ -2,10 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, setAuthToken } from "./api";
 import type { Agent, AgentRelease, AgentRun, Message, SystemInfo, ValidationRecord } from "./types";
 
+// Tasks that exercise the control plane, rather than the starter's generic
+// "build me a todo app" prompts. Every Run here is staged, diffed, verified and
+// gated before any of it can become durable state.
 const starterPrompts = [
-  "Create a small TypeScript CLI that prints a weather summary from sample JSON.",
-  "Inspect this workspace and explain what you would improve first.",
-  "Build a responsive single-page todo app with tests.",
+  "Tidy this workspace. Remove anything unnecessary.",
+  "Add a NOTES.md summarising what could be cleaned up, and change nothing else.",
+  "Update the README with a one-line project summary.",
 ];
 
 const emptyForm = {
@@ -203,6 +206,45 @@ export default function App() {
     finally { setValidating(false); }
   };
 
+  const forkGeneration = async () => {
+    if (!selected) return;
+    const generationId = window.prompt('Fork which generation?', selected.activeGenerationId) ?? '';
+    if (!generationId) return;
+    setBusy(true); setError(null);
+    try {
+      const { agent } = await api.forkAgent(selected.id, generationId, selected.name + ' fork');
+      await refreshAgents();
+      setSelectedId(agent.id);
+      setPromotionMessage('Forked ' + generationId + ' into an independent Agent with a fresh session.');
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setBusy(false); }
+  };
+
+  const attachToWorld = async () => {
+    if (!selected) return;
+    // Two Agents in one world is what makes a write-write conflict possible at all.
+    const worldId = window.prompt('Attach this Agent to which world id?', selected.worldId) ?? '';
+    if (!worldId || worldId === selected.worldId) return;
+    setBusy(true); setError(null);
+    try {
+      await api.attachWorld(selected.id, worldId);
+      await refreshAgents();
+      setPromotionMessage('Attached to world ' + worldId.slice(0, 8) + '. Concurrent Runs now share one immutable world under snapshot isolation.');
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+    finally { setBusy(false); }
+  };
+
+  const verifyLedger = async () => {
+    setError(null);
+    try {
+      const { valid, reason } = await api.verifyLedger();
+      // A tampered entry is reported by id and position — that IS the mechanism working,
+      // so it is a normal response rather than an error.
+      if (valid) setPromotionMessage("Ledger verified: the hash chain is intact and every entry signature matches.");
+      else setError("Ledger verification FAILED — " + reason);
+    } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); }
+  };
+
   const promoteCandidate = async () => {
     if (!selected || !validation || !["certified", "review_required"].includes(validation.status)) return;
     setPromoting(true); setPromotionMessage(null); setError(null);
@@ -212,7 +254,10 @@ export default function App() {
   };
 
   const acknowledgeValidation = async () => {
-    if (!validation || validation.status !== "blocked") return;
+    // Only flagged behavioural drift is reviewable. A `blocked` validation failed an
+    // absolute gate and can never be acknowledged — gating this on "blocked" showed
+    // the button exactly when it could not work, and hid it when it could.
+    if (!validation || validation.status !== "review_required") return;
     const actor = window.prompt("Acknowledgement actor", "demo operator") ?? "";
     const reason = window.prompt("Why should this flagged drift be reviewed?", "Reviewed and accepted for this controlled change") ?? "";
     if (!actor || !reason) return;
@@ -547,7 +592,12 @@ export default function App() {
             <section className="release-panel">
               <div className="playground-topbar"><div><span className="eyebrow">StateGuard control plane</span><h2>Releases and validation</h2></div><span className="session-info">ACTIVE {selected.activeGenerationId}</span></div>
               <div className="release-summary"><span>World: {selected.worldId.slice(0, 8)} · {selected.activeGenerationId}</span><span>Active release: v{releases.find((item) => item.id === selected.activeReleaseId)?.version ?? "—"} · {selected.activeReleaseId.slice(0, 8)}</span><span>Candidate: {selected.candidateReleaseId ? "v" + (releases.find((item) => item.id === selected.candidateReleaseId)?.version ?? "—") : "none"}</span><span>Protected: {selected.policy.protectedPaths.join(", ") || "none"}</span></div>
-              <div className="validation-controls"><input value={validationTask} onChange={(event) => setValidationTask(event.target.value)} placeholder="Fixed validation task" /><button className="button button-primary" onClick={validateCandidate} disabled={validating || !selected.candidateReleaseId}>{validating ? <Spinner /> : "Validate candidate"}</button>{validation?.status === "blocked" && <button className="button button-ghost" onClick={acknowledgeValidation}>Acknowledge for review</button>}{validation && <button className="button button-ghost" onClick={bisectValidation}>Diagnose deletion</button>}<button className="button button-primary" onClick={promoteCandidate} disabled={promoting || !["certified", "review_required"].includes(validation?.status ?? "")}>{promoting ? <Spinner /> : validation?.status === "review_required" ? "Promote reviewed" : "Promote certified"}</button></div>
+              <div className="world-controls">
+                <button className="button button-ghost" onClick={attachToWorld} disabled={busy} title="Put two Agents in one immutable world. Concurrent Runs then commit under snapshot isolation, first-committer-wins.">Attach to world…</button>
+                <button className="button button-ghost" onClick={forkGeneration} disabled={busy} title="Copy a generation into an independent Agent with a fresh session.">Fork generation…</button>
+                <button className="button button-ghost" onClick={verifyLedger} title="Recompute the hash chain and every entry signature.">Verify ledger</button>
+              </div>
+              <div className="validation-controls"><input value={validationTask} onChange={(event) => setValidationTask(event.target.value)} placeholder="Fixed validation task" /><button className="button button-primary" onClick={validateCandidate} disabled={validating || !selected.candidateReleaseId}>{validating ? <Spinner /> : "Validate candidate"}</button>{validation?.status === "review_required" && !validation.reviewAcknowledgement && <button className="button button-ghost" onClick={acknowledgeValidation}>Acknowledge for review</button>}{validation && <button className="button button-ghost" onClick={bisectValidation}>Diagnose deletion</button>}<button className="button button-primary" onClick={promoteCandidate} disabled={promoting || !["certified", "review_required"].includes(validation?.status ?? "")}>{promoting ? <Spinner /> : validation?.status === "review_required" ? "Promote reviewed" : "Promote certified"}</button></div>
               {promotionMessage && <div className="promotion-message">{promotionMessage}</div>}
               {validation && <div className={"validation-result validation-" + validation.status}><strong>{validation.status.toUpperCase()}</strong><span>Context {validation.context.contextHash.slice(0, 12)}</span><span>Ghost Replay: {validation.ghostJournal.length} event(s), non-authoritative</span>{validation.error && <span>Runtime failure: {validation.error}</span>}{validation.reviewAcknowledgement && <span>Reviewed by {validation.reviewAcknowledgement.actor}: {validation.reviewAcknowledgement.reason}</span>}{validation.differentialDeletions.length > 0 && <span>Differential block: new deletions — {validation.differentialDeletions.join(", ")}</span>}{validation.bisection && <span>{validation.bisection.inconclusive ? "Bisection inconclusive: probes are attribution evidence, not causation." : "Bisection evidence: " + validation.bisection.culpritSegments.join(" / ") + " (" + validation.bisection.probes.length + " probes)"}</span>}{validation.novelEffects.length > 0 && <span>Novel destructive effects: {validation.novelEffects.join(", ")} ({validation.historyRecordCount} historical runs{validation.historyRecordCount < validation.historyMinRecords ? `; informational until ${validation.historyMinRecords}` : ""})</span>}{validation.status === "baseline_unhealthy" && <span>The active release failed its own gates on this task — the candidate was not judged against it.</span>}{validation.status === "review_required" && <span>Human acknowledgement recorded; promotion requires an audited actor and reason.</span>}{validation.baselineGateFailures.map((failure, index) => <span key={"b" + failure.code + index}>Active release gate {failure.code}: {failure.reason}</span>)}{validation.candidateGateFailures.map((failure, index) => <span key={"c" + failure.code + index}>Candidate gate {failure.code}: {failure.reason}</span>)}{validation.candidateDiff.changes.length > 0 && <span>Candidate diff: {validation.candidateDiff.changes.map((change) => change.kind + " " + change.path).join(", ")}</span>}</div>}
             </section>
@@ -570,10 +620,12 @@ export default function App() {
                     <div className="welcome-orbit">
                       <div>⌁</div>
                     </div>
-                    <h3>What should {selected.name} build?</h3>
+                    <h3>Give {selected.name} a task</h3>
                     <p>
-                      The Agent can inspect files, write code, run commands, and continue the
-                      same Codex session across messages.
+                      Every Run executes against a staging copy of{" "}
+                      <strong>{selected.activeGenerationId}</strong>. It becomes the next
+                      immutable generation only after the diff passes the trusted verifier
+                      and the absolute gates. A refused Run leaves this world untouched.
                     </p>
                     <div className="prompt-grid">
                       {starterPrompts.map((item) => (
