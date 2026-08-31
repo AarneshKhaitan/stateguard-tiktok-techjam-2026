@@ -25,6 +25,7 @@ import { createValidationContext } from "./validation-context.js";
 import { referenceCacheKey } from "./reference-cache.js";
 import { Ledger } from "./ledger.js";
 import { buildGhostJournal } from "./ghost-replay.js";
+import { BehaviouralHistory } from "./behavioural-history.js";
 import path from "node:path";
 
 const now = () => new Date().toISOString();
@@ -34,6 +35,7 @@ export class AgentService {
   private readonly cancellationRequests = new Set<string>();
   private readonly baselineReferences = new Map<string, { diff: WorkspaceDiff; gates: ReturnType<typeof evaluateAbsoluteGates> }>();
   private readonly ledger: Ledger;
+  private readonly history: BehaviouralHistory;
 
   constructor(
     private readonly config: AppConfig,
@@ -43,6 +45,7 @@ export class AgentService {
     private readonly verifier: VerificationRunner,
   ) {
     this.ledger = new Ledger(path.join(config.dataDirectory, "ledger.json"), path.join(config.dataDirectory, "ledger.key"));
+    this.history = new BehaviouralHistory(path.join(config.dataDirectory, "history"));
   }
 
   async initialize(): Promise<void> {
@@ -210,7 +213,7 @@ export class AgentService {
         sandboxMode: this.config.codexSandboxMode, runtimeImage: this.executionRuntimeId(),
       }),
       baselineDiff: this.emptyDiff(agent.activeGenerationId), candidateDiff: this.emptyDiff(agent.activeGenerationId),
-      baselineGateFailures: [], candidateGateFailures: [], differentialDeletions: [], error: null,
+      baselineGateFailures: [], candidateGateFailures: [], differentialDeletions: [], novelEffects: [], historyRecordCount: 0, historyMinRecords: this.config.historyMinRecords, error: null,
       createdAt: now(), completedAt: null,
       reviewAcknowledgement: null, promotionAudit: null,
       ghostJournal: [],
@@ -266,6 +269,7 @@ export class AgentService {
       if (!cachedReference) this.baselineReferences.set(referenceKey, structuredClone(first));
       const second = await this.runValidationExecution(agent, candidate, validation.candidateRunId, validation.task, basePath);
       const differentialDeletions = newDestructiveDeletions(first.diff, second.diff);
+      const novelty = await this.history.novelDeletedPaths(agent.id, second.diff.changes);
       // The baseline failing its own gates is not the candidate's fault. Reporting it as
       // "blocked" would attribute the active release's problem to the candidate, so it
       // gets its own status. Enforcement is the same — nothing is certified against an
@@ -278,15 +282,18 @@ export class AgentService {
       // reviewable. A new deletion is not forbidden — that is the entire point of the
       // differential — so it escalates to a human with a recorded actor and reason.
       const blocked = second.gates.failures.length > 0;
-      const reviewRequired = !blocked && differentialDeletions.length > 0;
+      // A thin history is deliberately informational only. We retain the observed
+      // novelty in the record, but do not pretend a new Agent has an envelope yet.
+      const novelEffectRequiresReview = novelty.recordCount >= this.config.historyMinRecords && novelty.paths.length > 0;
+      const reviewRequired = !blocked && (differentialDeletions.length > 0 || novelEffectRequiresReview);
       await this.store.mutate((db) => {
         const record = db.validations.find((item) => item.id === validation.id); const storedAgent = db.agents.find((item) => item.id === agent.id);
         if (!record || !storedAgent) return;
         record.status = baselineUnhealthy ? "baseline_unhealthy" : blocked ? "blocked" : reviewRequired ? "review_required" : "certified"; record.baselineDiff = first.diff; record.candidateDiff = second.diff;
-        record.baselineGateFailures = first.gates.failures; record.candidateGateFailures = second.gates.failures; record.differentialDeletions = differentialDeletions; record.ghostJournal = second.journal; record.completedAt = now();
+        record.baselineGateFailures = first.gates.failures; record.candidateGateFailures = second.gates.failures; record.differentialDeletions = differentialDeletions; record.novelEffects = novelty.paths; record.historyRecordCount = novelty.recordCount; record.historyMinRecords = this.config.historyMinRecords; record.ghostJournal = second.journal; record.completedAt = now();
         storedAgent.status = "ready"; storedAgent.updatedAt = now();
       });
-      await this.ledger.append("validation", agent.id, { validationId: validation.id, status: baselineUnhealthy ? "baseline_unhealthy" : blocked ? "blocked" : reviewRequired ? "review_required" : "certified", differentialDeletions, baselineGateFailures: first.gates.failures, candidateGateFailures: second.gates.failures });
+      await this.ledger.append("validation", agent.id, { validationId: validation.id, status: baselineUnhealthy ? "baseline_unhealthy" : blocked ? "blocked" : reviewRequired ? "review_required" : "certified", differentialDeletions, novelEffects: novelty.paths, historyRecordCount: novelty.recordCount, baselineGateFailures: first.gates.failures, candidateGateFailures: second.gates.failures });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.store.mutate((db) => { const record = db.validations.find((item) => item.id === validation.id); const storedAgent = db.agents.find((item) => item.id === agent.id); if (record) { record.status = "failed"; record.error = message; record.completedAt = now(); } if (storedAgent) { storedAgent.status = "error"; storedAgent.lastError = message; storedAgent.updatedAt = now(); } });
@@ -601,6 +608,18 @@ export class AgentService {
         if (!diff.isEmpty) nextGenerationId = await this.workspaces.commitStaging(agentAtStart, stagingPath);
         else await this.workspaces.removeStaging(stagingPath);
         const completedAt = now();
+        // Publish the sidecar evidence before exposing a completed Run. Otherwise a
+        // reader can observe the new generation and completion state while its
+        // behavioural record is still absent. This remains a separate crash-safe
+        // sidecar write, not an assertion of a multi-file atomic transaction.
+        if (!diff.isEmpty) {
+          await this.history.append({
+            id: randomUUID(), agentId: agentAtStart.id, runId: run.id,
+            releaseId: agentAtStart.activeReleaseId, generationId: nextGenerationId,
+            taskHash: this.hashTask(run.prompt),
+            effects: diff.changes.map(({ kind, path }) => ({ kind, path })), createdAt: completedAt,
+          });
+        }
         await this.store.mutate((database) => {
           const storedRun = database.runs.find((item) => item.id === run.id);
           const agent = database.agents.find((item) => item.id === agentAtStart.id);

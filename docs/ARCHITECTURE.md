@@ -112,6 +112,20 @@ because a snapshot read lets two callers both observe `ready`.
 
 ## Guarantees and limits
 
+## Behavioural history
+
+After a production Run has passed its absolute gates and published a non-empty
+generation, StateGuard appends an `EffectRecord` to
+`<dataDirectory>/history/<agentId>.jsonl`. The control-plane `JsonStore` intentionally
+does not carry this growing evidence data. A cached in-memory envelope counts deleted
+directory prefixes, modified prefixes, and exact touched paths. A candidate deletion
+under a prefix never before deleted by that Agent is surfaced as `NOVEL_EFFECT`.
+
+`NOVEL_EFFECT` is behavioural regression evidence, not an absolute policy gate. It
+never appears in `candidateGateFailures`. Until `HISTORY_MIN_RECORDS` (five by default)
+published records exist, it is explicitly informational; after that, it contributes to
+`REVIEW_REQUIRED` and requires the existing audited acknowledgement path.
+
 The generation commit is **crash-safe, not atomic**: the rename and the ACTIVE
 pointer update are two operations, so a crash between them leaves a harmless
 orphaned generation, never a missing or corrupted one. The persistent workspace is

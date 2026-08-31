@@ -57,6 +57,7 @@ const envSchema = z.object({
     .default("false")
     .transform((value) => ["true", "1", "yes", "on"].includes(value.trim().toLowerCase())),
   CANARY_RUNS: z.coerce.number().int().min(1).max(100).default(3),
+  HISTORY_MIN_RECORDS: z.coerce.number().int().min(1).max(10_000).default(5),
   ARK_BASE_URL: z
     .string()
     .url()
@@ -107,6 +108,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
     codexVersion: env.CODEX_VERSION,
     canaryEnabled: env.CANARY_ENABLED,
     canaryRuns: env.CANARY_RUNS,
+    historyMinRecords: env.HISTORY_MIN_RECORDS,
     arkBaseUrl: env.ARK_BASE_URL.replace(/\/+$/, ""),
     nodeEnv: env.NODE_ENV,
   };

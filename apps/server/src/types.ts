@@ -124,6 +124,11 @@ export interface ValidationRecord {
   baselineGateFailures: GateFailure[];
   candidateGateFailures: GateFailure[];
   differentialDeletions: string[];
+  /** Informational below the cold-start threshold. Novel effects are behavioural
+   *  evidence, never absolute gate failures. */
+  novelEffects: string[];
+  historyRecordCount: number;
+  historyMinRecords: number;
   error: string | null;
   createdAt: string;
   completedAt: string | null;

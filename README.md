@@ -258,6 +258,18 @@ archives its workspace under `workspaces/.deleted/`.
 
 ## Guarantees and limits
 
+### Behavioural history is evidence, not a corpus
+
+Each production Run that publishes a non-empty generation appends its manifest effects
+to a per-Agent JSONL sidecar. StateGuard uses that longitudinal evidence to flag a
+candidate deletion under a directory the Agent has never previously deleted from.
+This is complementary to the same-task differential: history spans tasks; the
+baseline comparison holds task and world state fixed. Below five published Runs the
+signal remains informational only — a cold-start Agent has no meaningful envelope yet.
+Novel effects require an audited review only after that threshold; they are never
+absolute gate failures. The system records regression evidence from observed Runs; it
+does not claim that an instruction caused an effect.
+
 Generations contain pure world state. `AGENTS.md` is platform-managed,
 synthesized into staging only, hashed, and stripped before diffing. The trusted
 verifier is outside Agent control and reads its command from server-side policy.

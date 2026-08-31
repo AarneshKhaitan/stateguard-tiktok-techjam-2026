@@ -56,6 +56,11 @@ Built on the same primitives, each independently tested:
 - **Canary rollout with auto-rollback**, opt-in and off by default.
 - **Ghost Replay**, a non-authoritative visualisation of what a candidate would
   have done, with credential-shaped and oversized file contents withheld.
+- **Behavioural history.** Each published production generation contributes an
+  append-only effect record. A deletion under a never-before-deleted directory
+  is surfaced as a novel effect only after five historical Runs; before that it
+  is explicitly informational. This compounds regression evidence over time —
+  it is not a claim that the initial history is representative.
 
 ## Technical stack
 
