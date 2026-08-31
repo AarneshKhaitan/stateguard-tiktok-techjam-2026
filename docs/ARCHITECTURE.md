@@ -103,8 +103,6 @@ This is optimistic concurrency control applied to release authority: *read v12, 
 work, commit only if it is still v12* becomes *certify against gen_12, promote only
 if production is still gen_12*.
 
-## Concurrency
-
 ## Shared worlds
 
 Worlds own the active immutable generation; Agents carry a `worldId`. A Run stages
@@ -114,12 +112,11 @@ is rebased and published sequentially, while overlap is refused as
 `CONCURRENT_WRITE_CONFLICT`, naming the path and winning generation. Solo Agents keep
 their private world and fast-path behavior unchanged.
 
-`JsonStore` serializes mutations through a promise queue. Every decision that
-depends on Agent status — send, edit, policy change, validate, promote — is
-**re-checked inside the serialized mutation**, not only in a read-only pre-flight,
-because a snapshot read lets two callers both observe `ready`.
-
-## Guarantees and limits
+This is the failure no single diff can reveal. Agent A refactors a config key; Agent B
+adds an option to that config. Both diffs are clean, both pass every gate, and the
+damage lives in the interaction — invisible in either review. Git detects such
+conflicts textually and hands them to a human; this detects them before either write
+becomes durable, automatically, under a stated isolation level.
 
 ## Behavioural history
 
@@ -142,6 +139,19 @@ instruction paragraphs (or lines when no paragraphs exist). Each probe is an
 in-memory `probe` release, runs in discarded staging with a fresh thread, and is never
 stored, listed, or promotable. Its result is attribution evidence, not causation; an
 effect that does not reproduce is explicitly marked `inconclusive`.
+
+## Concurrency
+
+`JsonStore` serializes mutations through a promise queue. Every decision that depends
+on Agent status — send, edit, policy change, validate, promote — is **re-checked inside
+the serialized mutation**, not only in a read-only pre-flight, because a snapshot read
+lets two callers both observe `ready`.
+
+Generation publication is additionally serialized **per world**, so the conflict check
+and the commit that follows it cannot interleave with another Agent's commit to the
+same world.
+
+## Guarantees and limits
 
 The generation commit is **crash-safe, not atomic**: the rename and the ACTIVE
 pointer update are two operations, so a crash between them leaves a harmless

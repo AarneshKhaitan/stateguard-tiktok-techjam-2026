@@ -101,7 +101,7 @@ only the workspace path passed to the runner.
 
 ```powershell
 npm install
-npm run check   # typecheck, 63 tests, then both builds
+npm run check   # typecheck, 70 tests, then both builds
 ```
 
 Test files run serially by configuration (`apps/server/vitest.config.ts`). The

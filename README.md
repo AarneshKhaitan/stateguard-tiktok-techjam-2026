@@ -311,6 +311,25 @@ and payments.
 
 Known limitations are intentional and visible to the judge:
 
+- **Behavioural history is a signal, never a gate.** A candidate deletion under a
+  directory prefix this Agent has never deleted under is surfaced as `NOVEL_EFFECT`.
+  It never appears in `candidateGateFailures`; it contributes to `REVIEW_REQUIRED`,
+  which a human can still promote with a recorded actor and reason. Below
+  `HISTORY_MIN_RECORDS` (5 by default) the envelope is too thin to mean anything, so
+  the signal is **informational only** and does not affect the outcome. The
+  architecture for a compounding corpus is shipped; a corpus with real depth needs
+  production history this project has not accumulated. Do not claim otherwise.
+- **Bisection produces attribution evidence, not causation.** It binary-searches
+  changed instruction segments and reports the minimal subset that reproduced an
+  effect. Each probe is one execution of stochastic software, so a segment that fails
+  to reproduce is not proven innocent. When the full candidate set fails to reproduce
+  the target, the result is explicitly marked `inconclusive`.
+- **Concurrency guarantee: snapshot isolation, first-committer-wins.** Agents sharing
+  a world stage from a base generation; on commit, work disjoint from generations
+  committed since that base is rebased and published, and overlapping work is refused
+  as `CONCURRENT_WRITE_CONFLICT`. This is path-level, not semantic — two Agents
+  editing different regions of the same file conflict, and two Agents making
+  semantically incompatible edits to different files do not.
 - Symlinks and empty directories are not tracked by the diff engine.
 - Full-tree copying retains each generation; garbage collection is not yet
   implemented.
