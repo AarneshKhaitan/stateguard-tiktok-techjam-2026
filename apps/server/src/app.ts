@@ -135,6 +135,8 @@ export async function createApp(
     return { agent: await service.promote(id, body.validationId, body.actor, body.reason) };
   });
 
+  app.get("/api/ledger/verify", async () => { await service.verifyLedger(); return { valid: true }; });
+
   app.delete("/api/agents/:id", async (request) => {
     const { id } = agentIdParams.parse(request.params);
     return service.deleteAgent(id);

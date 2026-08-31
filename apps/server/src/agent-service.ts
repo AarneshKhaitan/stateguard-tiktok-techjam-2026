@@ -23,6 +23,8 @@ import { createRelease } from "./release.js";
 import { newDestructiveDeletions } from "./differential.js";
 import { createValidationContext } from "./validation-context.js";
 import { referenceCacheKey } from "./reference-cache.js";
+import { Ledger } from "./ledger.js";
+import path from "node:path";
 
 const now = () => new Date().toISOString();
 
@@ -30,6 +32,7 @@ export class AgentService {
   private readonly activeExecutions = new Map<string, Promise<void>>();
   private readonly cancellationRequests = new Set<string>();
   private readonly baselineReferences = new Map<string, { diff: WorkspaceDiff; gates: ReturnType<typeof evaluateAbsoluteGates> }>();
+  private readonly ledger: Ledger;
 
   constructor(
     private readonly config: AppConfig,
@@ -37,10 +40,13 @@ export class AgentService {
     private readonly workspaces: WorkspaceManager,
     private readonly runner: AgentRunner,
     private readonly verifier: VerificationRunner,
-  ) {}
+  ) {
+    this.ledger = new Ledger(path.join(config.dataDirectory, "ledger.json"), path.join(config.dataDirectory, "ledger.key"));
+  }
 
   async initialize(): Promise<void> {
     await this.store.initialize();
+    await this.ledger.initialize();
     await this.workspaces.initialize();
     await this.store.mutate((database) => {
       for (const run of database.runs) {
@@ -244,9 +250,11 @@ export class AgentService {
         record.baselineGateFailures = first.gates.failures; record.candidateGateFailures = second.gates.failures; record.differentialDeletions = differentialDeletions; record.completedAt = now();
         storedAgent.status = "ready"; storedAgent.updatedAt = now();
       });
+      await this.ledger.append("validation", agent.id, { validationId: validation.id, status: baselineUnhealthy ? "baseline_unhealthy" : blocked ? "blocked" : "certified", differentialDeletions, baselineGateFailures: first.gates.failures, candidateGateFailures: second.gates.failures });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.store.mutate((db) => { const record = db.validations.find((item) => item.id === validation.id); const storedAgent = db.agents.find((item) => item.id === agent.id); if (record) { record.status = "failed"; record.error = message; record.completedAt = now(); } if (storedAgent) { storedAgent.status = "error"; storedAgent.lastError = message; storedAgent.updatedAt = now(); } });
+      await this.ledger.append("validation", agent.id, { validationId: validation.id, status: "failed", error: message });
     }
   }
 
@@ -297,7 +305,8 @@ export class AgentService {
 
   async promote(id: string, validationId?: string, actor?: string, reason?: string): Promise<Agent> {
     this.getAgent(id);
-    return this.store.mutate((database) => {
+    try {
+      const promoted = await this.store.mutate((database) => {
       const agent = database.agents.find((item) => item.id === id);
       if (!agent) throw new HttpError(404, "Agent not found");
       // Without this, promotion during an in-flight Run defeats the whole CAS: the
@@ -336,8 +345,16 @@ export class AgentService {
       if (validation.status === "review_required") validation.promotionAudit = { actor: actor!.trim(), reason: reason!.trim(), promotedAt: now() };
       agent.updatedAt = now();
       return structuredClone(agent);
-    });
+      });
+      await this.ledger.append("promotion", id, { validationId: validationId ?? null, activeReleaseId: promoted.activeReleaseId, activeGenerationId: promoted.activeGenerationId });
+      return promoted;
+    } catch (error) {
+      await this.ledger.append("promotion_refusal", id, { validationId: validationId ?? null, reason: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
   }
+
+  async verifyLedger(): Promise<void> { await this.ledger.verify(); }
 
   async startAgent(id: string): Promise<Agent> {
     return this.setStatus(id, "ready");
