@@ -1,0 +1,12 @@
+flowchart TB
+    Gen["ACTIVE gen_NNNN<br/>immutable world state"]
+    Gen -->|copy| Staging["staging/tx_runId<br/>AGENTS.md synthesized here only"]
+    Staging --> Codex["AgentRunner → Codex → Ark<br/>workspacePath seam, unmodified"]
+    Codex --> Diff["Manifest diff<br/>the authoritative record"]
+    Diff --> Verifier["Trusted verifier<br/>read-only mount · no Ark key<br/>command from server-side policy"]
+    Verifier --> Gates{"Absolute gates"}
+    Gates -->|fail| Discard["Discard staging<br/>ACTIVE byte-identical"]
+    Gates -->|pass| Iso{"World advanced<br/>since base?"}
+    Iso -->|"overlapping paths"| Conflict["CONCURRENT_WRITE_CONFLICT<br/>snapshot isolation<br/>first-committer-wins"]
+    Iso -->|"no, or disjoint"| Publish["Publish next generation<br/>ACTIVE advances"]
+    Publish --> Hist["Append EffectRecord<br/>to behavioural history"]

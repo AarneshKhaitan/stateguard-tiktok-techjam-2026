@@ -1,0 +1,17 @@
+flowchart TB
+    Base["ACTIVE gen_N — one world, one task"]
+    Base --> RunA["Active release executes"]
+    Base --> RunB["Candidate release executes"]
+    RunA --> DiffA["baseline diff"]
+    RunB --> DiffB["candidate diff"]
+    DiffA --> Cmp["Compare observed effects"]
+    DiffB --> Cmp
+    Hist["Behavioural history<br/>signal, never a gate"] -.-> Cmp
+    Cmp --> Outcome{"Outcome"}
+    Outcome -->|"absolute gate failed"| Blocked["BLOCKED — never overridable"]
+    Outcome -->|"new destructive effect"| Review["REVIEW_REQUIRED<br/>audited actor + reason"]
+    Outcome -->|"neither"| Certified["CERTIFIED"]
+    Review --> CAS
+    Certified --> CAS{"Promotion CAS<br/>ten-field context"}
+    CAS -->|"any field drifted"| Stale["Refused — revalidation required"]
+    CAS -->|"all match"| Promote["Active release changes<br/>generation does NOT"]

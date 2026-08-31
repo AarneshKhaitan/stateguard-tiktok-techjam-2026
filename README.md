@@ -227,20 +227,23 @@ See [.env.example](.env.example) for all Runtime and resource-limit options.
 
 ## How it works
 
+**The Agent never edits current state. It proposes the next state.**
+
 ```mermaid
 flowchart LR
     UI["React UI"] --> API["Fastify API"] --> S["AgentService"]
-    S --> Store["JsonStore\nAgent + policy + releases + validations"]
-    S --> W["WorkspaceManager"]
-    W --> G["ACTIVE generation\nimmutable gen_NNNN"]
-    S --> R["AgentRunner\nworkspacePath seam"]
-    R --> C["staging execution"] --> A["Codex CLI / Ark"]
-    S --> V["trusted verifier"]
-    V --> C
-    S --> D["diff + absolute gates\n+ differential gate"]
-    D --> P["promotion CAS"]
-    P --> Store
+    S --> Gen["ACTIVE gen_NNNN<br/>immutable"]
+    Gen -->|copy| ST["staging"]
+    ST --> Codex["AgentRunner → Codex → Ark<br/>workspacePath seam, unmodified"]
+    Codex --> Judge["Diff · trusted verifier · gates<br/>differential vs baseline"]
+    Judge -->|"refused"| Drop["Discard staging<br/>ACTIVE byte-identical"]
+    Judge -->|"accepted"| Pub["Publish next generation"]
+    Pub --> Gen
 ```
+
+Two diagrams in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) break this down: the
+per-Run execution path, and the release-control path where a candidate is judged
+against the active release from the same world state.
 
 The integration seam is the starter's `AgentRunner.run({ agentId,
 workspacePath, prompt, threadId })`. StateGuard changes the

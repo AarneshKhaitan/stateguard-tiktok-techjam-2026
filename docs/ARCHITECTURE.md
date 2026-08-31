@@ -15,22 +15,43 @@ caller-provided path. StateGuard changes only what that path points at — a sta
 copy instead of the live workspace. The starter's runners are unmodified and
 unforked, and both the container and local-process providers work unchanged.
 
+**Every Run — the Agent proposes the next state, never edits the current one:**
+
 ```mermaid
 flowchart TB
-    UI["React UI"] --> API["Fastify API"]
-    API --> Service["AgentService"]
-    Service --> Releases["Release model<br/>immutable, name+description+instructions"]
-    Service --> Policy["GatePolicy<br/>server-side, separate axis"]
-    Service --> Gen["Workspace generations<br/>immutable world state"]
-    Gen -->|copy| Staging["staging/tx_runId"]
-    Service --> Runner{"AgentRunner<br/>(unmodified)"}
-    Runner --> Staging
-    Staging --> Diff["Manifest diff"]
-    Diff --> Verifier["VerificationRunner<br/>read-only, no Ark key"]
-    Verifier --> Gates["Absolute gates"]
-    Gates -->|pass| Publish["Publish next generation"]
-    Gates -->|fail| Discard["Discard staging"]
-    Service --> Ledger["Hash-chained ledger"]
+    Gen["ACTIVE gen_NNNN<br/>immutable world state"]
+    Gen -->|copy| Staging["staging/tx_runId<br/>AGENTS.md synthesized here only"]
+    Staging --> Codex["AgentRunner → Codex → Ark<br/>workspacePath seam, unmodified"]
+    Codex --> Diff["Manifest diff<br/>the authoritative record"]
+    Diff --> Verifier["Trusted verifier<br/>read-only mount · no Ark key<br/>command from server-side policy"]
+    Verifier --> Gates{"Absolute gates"}
+    Gates -->|fail| Discard["Discard staging<br/>ACTIVE byte-identical"]
+    Gates -->|pass| Iso{"World advanced<br/>since base?"}
+    Iso -->|"overlapping paths"| Conflict["CONCURRENT_WRITE_CONFLICT<br/>snapshot isolation<br/>first-committer-wins"]
+    Iso -->|"no, or disjoint"| Publish["Publish next generation<br/>ACTIVE advances"]
+    Publish --> Hist["Append EffectRecord<br/>to behavioural history"]
+```
+
+**Release control — the same machinery, pointed at a behaviour change:**
+
+```mermaid
+flowchart TB
+    Base["ACTIVE gen_N — one world, one task"]
+    Base --> RunA["Active release executes"]
+    Base --> RunB["Candidate release executes"]
+    RunA --> DiffA["baseline diff"]
+    RunB --> DiffB["candidate diff"]
+    DiffA --> Cmp["Compare observed effects"]
+    DiffB --> Cmp
+    Hist["Behavioural history<br/>signal, never a gate"] -.-> Cmp
+    Cmp --> Outcome{"Outcome"}
+    Outcome -->|"absolute gate failed"| Blocked["BLOCKED — never overridable"]
+    Outcome -->|"new destructive effect"| Review["REVIEW_REQUIRED<br/>audited actor + reason"]
+    Outcome -->|"neither"| Certified["CERTIFIED"]
+    Review --> CAS
+    Certified --> CAS{"Promotion CAS<br/>ten-field context"}
+    CAS -->|"any field drifted"| Stale["Refused — revalidation required"]
+    CAS -->|"all match"| Promote["Active release changes<br/>generation does NOT"]
 ```
 
 ## Execution model
@@ -85,7 +106,7 @@ a baseline — so it escalates to a human instead of refusing.
 
 A certification is bound to a ten-field `ValidationContext`:
 
-```
+```text
 baselineReleaseHash   candidateReleaseHash
 generationId          generationHash        <- content, not just the label
 taskHash              policyHash

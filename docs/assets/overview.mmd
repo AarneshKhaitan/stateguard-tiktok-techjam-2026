@@ -1,0 +1,9 @@
+flowchart LR
+    UI["React UI"] --> API["Fastify API"] --> S["AgentService"]
+    S --> Gen["ACTIVE gen_NNNN<br/>immutable"]
+    Gen -->|copy| ST["staging"]
+    ST --> Codex["AgentRunner → Codex → Ark<br/>workspacePath seam, unmodified"]
+    Codex --> Judge["Diff · trusted verifier · gates<br/>differential vs baseline"]
+    Judge -->|"refused"| Drop["Discard staging<br/>ACTIVE byte-identical"]
+    Judge -->|"accepted"| Pub["Publish next generation"]
+    Pub --> Gen

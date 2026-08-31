@@ -75,6 +75,19 @@ attribution evidence and becomes inconclusive when the observed effect does not 
 
 ## Architecture and repository
 
+![StateGuard execution path](assets/architecture-1.png)
+
+*Every Run: the Agent stages a copy of the immutable ACTIVE generation, and only a
+diff that passes the trusted verifier and the absolute gates is published as the next
+generation. A failed, refused, or crashed Run leaves the ACTIVE generation
+byte-identical.*
+
+![StateGuard release control](assets/architecture-2.png)
+
+*Release control: the active release and the candidate execute against the same world
+state and task, their observed effects are compared, and the resulting certification is
+bound to a ten-field context that expires the moment any of it drifts.*
+
 The architecture diagram and local instructions are in the repository
 [README](../README.md). The implementation changes only the caller-provided
 `workspacePath` at the existing `AgentRunner` seam; the starter runner is not
