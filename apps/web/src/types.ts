@@ -8,6 +8,7 @@ export interface Agent {
   instructions: string;
   status: AgentStatus;
   workspacePath: string;
+  worldId: string;
   codexThreadId: string | null;
   activeGenerationId: string;
   activeReleaseId: string;

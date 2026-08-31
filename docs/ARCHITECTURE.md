@@ -105,6 +105,15 @@ if production is still gen_12*.
 
 ## Concurrency
 
+## Shared worlds
+
+Worlds own the active immutable generation; Agents carry a `worldId`. A Run stages
+from its base generation and commits with **snapshot isolation, first-committer-wins**.
+If the world advanced, StateGuard compares changed paths since the base: disjoint work
+is rebased and published sequentially, while overlap is refused as
+`CONCURRENT_WRITE_CONFLICT`, naming the path and winning generation. Solo Agents keep
+their private world and fast-path behavior unchanged.
+
 `JsonStore` serializes mutations through a promise queue. Every decision that
 depends on Agent status — send, edit, policy change, validate, promote — is
 **re-checked inside the serialized mutation**, not only in a read-only pre-flight,

@@ -276,6 +276,12 @@ An operator can binary-search changed instruction paragraphs with discarded,
 fresh-thread probes. The resulting minimal subset is attribution evidence, not proof of
 causation; StateGuard marks it inconclusive when the observed deletion does not recur.
 
+### Shared worlds
+
+Agents can share one immutable generation lineage. StateGuard provides snapshot
+isolation with first-committer-wins: disjoint concurrent changes are rebased, while
+overlapping paths are refused before the second write becomes durable.
+
 Generations contain pure world state. `AGENTS.md` is platform-managed,
 synthesized into staging only, hashed, and stripped before diffing. The trusted
 verifier is outside Agent control and reads its command from server-side policy.

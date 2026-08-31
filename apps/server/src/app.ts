@@ -98,6 +98,17 @@ export async function createApp(
     return { agent: await service.updateAgent(id, body) };
   });
 
+  app.get("/api/worlds/:id", async (request) => {
+    const { id } = agentIdParams.parse(request.params);
+    return { world: service.getWorld(id) };
+  });
+
+  app.post("/api/agents/:id/world", async (request) => {
+    const { id } = agentIdParams.parse(request.params);
+    const body = z.object({ worldId: z.string().uuid() }).parse(request.body);
+    return { agent: await service.attachAgentToWorld(id, body.worldId) };
+  });
+
   app.get("/api/agents/:id/releases", async (request) => {
     const { id } = agentIdParams.parse(request.params);
     return { releases: service.getReleases(id) };

@@ -1,16 +1,19 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { AgentRelease, Database } from "./types.js";
+import { randomUUID } from "node:crypto";
+import type { AgentRelease, Database, World } from "./types.js";
 import { defaultGatePolicy } from "./policy.js";
 import { createRelease } from "./release.js";
 
 const emptyDatabase = (): Database => ({
-  version: 4,
+  version: 5,
   agents: [],
   messages: [],
   runs: [],
   releases: [],
   validations: [],
+  worlds: [],
+  generationRecords: [],
 });
 
 export class JsonStore {
@@ -24,25 +27,30 @@ export class JsonStore {
     try {
       const raw = await readFile(this.filePath, "utf8");
       const parsed = JSON.parse(raw) as Database;
-      if (![1, 2, 3, 4].includes(parsed.version) || !Array.isArray(parsed.agents)) {
+      if (![1, 2, 3, 4, 5].includes(parsed.version) || !Array.isArray(parsed.agents)) {
         throw new Error("Unsupported database format");
       }
       const legacy = parsed as Database & { releases?: AgentRelease[]; validations?: Database["validations"] };
       const releases = [...(legacy.releases ?? [])];
+      const worlds: World[] = [...(parsed.worlds ?? [])];
       const agents = parsed.agents.map((agent) => {
         const activeReleaseId = agent.activeReleaseId ?? `${agent.id}:release:1`;
         if (!releases.some((release) => release.id === activeReleaseId)) releases.push({ ...createRelease(agent.id, agent, 1, "active", null), id: activeReleaseId });
-        return { ...agent, activeGenerationId: agent.activeGenerationId ?? "gen_0001", policy: agent.policy ?? defaultGatePolicy(), activeReleaseId, candidateReleaseId: agent.candidateReleaseId ?? null, canaryPreviousReleaseId: agent.canaryPreviousReleaseId ?? null, canaryRunsRemaining: agent.canaryRunsRemaining ?? 0, canaryConsecutiveFailures: agent.canaryConsecutiveFailures ?? 0 };
+        const worldId = agent.worldId ?? randomUUID();
+        if (!worlds.some((world) => world.id === worldId)) worlds.push({ id: worldId, name: agent.name + " world", activeGenerationId: agent.activeGenerationId ?? "gen_0001", workspacePath: agent.workspacePath, createdAt: agent.createdAt });
+        return { ...agent, worldId, activeGenerationId: agent.activeGenerationId ?? "gen_0001", policy: agent.policy ?? defaultGatePolicy(), activeReleaseId, candidateReleaseId: agent.candidateReleaseId ?? null, canaryPreviousReleaseId: agent.canaryPreviousReleaseId ?? null, canaryRunsRemaining: agent.canaryRunsRemaining ?? 0, canaryConsecutiveFailures: agent.canaryConsecutiveFailures ?? 0 };
       });
       for (const validation of legacy.validations ?? []) { validation.reviewAcknowledgement ??= null; validation.promotionAudit ??= null; validation.ghostJournal ??= []; validation.novelEffects ??= []; validation.historyRecordCount ??= 0; validation.historyMinRecords ??= 5; validation.bisection ??= null; }
       this.data = {
         ...parsed,
-        version: 4,
+        version: 5,
         agents,
         releases,
         validations: legacy.validations ?? [],
+        worlds,
+        generationRecords: parsed.generationRecords ?? [],
       };
-      if (parsed.version !== 4) await this.persist(this.data);
+      if (parsed.version !== 5) await this.persist(this.data);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;

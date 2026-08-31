@@ -16,7 +16,7 @@ export interface GatePolicy {
 }
 
 export interface GateFailure {
-  code: "PROTECTED_PATH" | "CHANGE_BUDGET" | "VERIFICATION" | "RUNTIME" | "AGENTS_TAMPERED";
+  code: "PROTECTED_PATH" | "CHANGE_BUDGET" | "VERIFICATION" | "RUNTIME" | "AGENTS_TAMPERED" | "CONCURRENT_WRITE_CONFLICT";
   reason: string;
 }
 
@@ -27,6 +27,7 @@ export interface Agent {
   instructions: string;
   status: AgentStatus;
   workspacePath: string;
+  worldId: string;
   activeGenerationId: GenerationId;
   activeReleaseId: string;
   candidateReleaseId: string | null;
@@ -83,13 +84,18 @@ export interface AgentRun {
 }
 
 export interface Database {
-  version: 4;
+  version: 5;
   agents: Agent[];
   messages: Message[];
   runs: AgentRun[];
   releases: AgentRelease[];
   validations: ValidationRecord[];
+  worlds: World[];
+  generationRecords: GenerationRecord[];
 }
+
+export interface World { id: string; name: string; activeGenerationId: GenerationId; workspacePath: string; createdAt: string; }
+export interface GenerationRecord { id: GenerationId; worldId: string; parentId: GenerationId | null; changedPaths: string[]; producedByAgentId: string; producedByRunId: string; createdAt: string; }
 
 export interface ValidationContext {
   baselineReleaseHash: string;

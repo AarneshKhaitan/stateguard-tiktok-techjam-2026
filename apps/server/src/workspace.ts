@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { Agent, AgentRelease, GenerationId } from "./types.js";
+import type { Agent, AgentRelease, GenerationId, WorkspaceDiff } from "./types.js";
 
 const initialGeneration: GenerationId = "gen_0001";
 
@@ -50,7 +50,9 @@ export class WorkspaceManager {
   }
 
   async prepareStagingFrom(agent: Agent, runId: string, basePath: string, instructionsSource: Pick<AgentRelease, "name" | "description" | "instructions"> | Agent): Promise<{ stagingPath: string; basePath: string; agentsMdHash: string }> {
-    const stagingPath = path.join(this.stagingRoot(agent), "tx_" + runId);
+    // Shared worlds use one generation lineage but concurrent Agents must never
+    // choose the same staging directory. The root stays compatible for solo Agents.
+    const stagingPath = path.join(this.stagingRoot(agent), "tx_" + agent.id + "_" + runId);
     await mkdir(this.stagingRoot(agent), { recursive: true });
     await cp(basePath, stagingPath, { recursive: true, force: false });
     const agentsMdHash = await this.synthesizeAgentsMd(stagingPath, instructionsSource);
@@ -85,6 +87,24 @@ export class WorkspaceManager {
     const generationId = "gen_" + String(Math.max(0, ...numbers) + 1).padStart(4, "0");
     await rename(stagingPath, this.generationPath(agent, generationId));
     return generationId;
+  }
+
+  async generationIds(agent: Agent): Promise<GenerationId[]> {
+    return (await readdir(path.join(agent.workspacePath, "generations"))).filter((entry) => /^gen_\d+$/.test(entry)).sort();
+  }
+
+  /** Rebase an already-executed disjoint Run onto the world's new head. Only the
+   *  manifest changes from its original staging tree are overlaid. */
+  async rebaseStaging(stagingPath: string, currentPath: string, diff: WorkspaceDiff): Promise<void> {
+    const rebased = stagingPath + ".rebased";
+    await cp(currentPath, rebased, { recursive: true, force: false });
+    for (const change of diff.changes) {
+      const target = path.join(rebased, change.path);
+      if (change.kind === "deleted") await rm(target, { recursive: true, force: true });
+      else { await mkdir(path.dirname(target), { recursive: true }); await cp(path.join(stagingPath, change.path), target, { recursive: true, force: true }); }
+    }
+    await rm(stagingPath, { recursive: true, force: true });
+    await rename(rebased, stagingPath);
   }
 
   async sweepStaging(): Promise<void> {

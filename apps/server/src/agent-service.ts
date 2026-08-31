@@ -43,6 +43,7 @@ function changedInstructionSegments(baseline: string, candidate: string): string
 
 export class AgentService {
   private readonly activeExecutions = new Map<string, Promise<void>>();
+  private readonly worldCommitQueues = new Map<string, Promise<void>>();
   private readonly cancellationRequests = new Set<string>();
   private readonly baselineReferences = new Map<string, { diff: WorkspaceDiff; gates: ReturnType<typeof evaluateAbsoluteGates> }>();
   private readonly ledger: Ledger;
@@ -79,6 +80,18 @@ export class AgentService {
       }
     });
     for (const agent of this.store.snapshot().agents) await this.workspaces.migrateAgent(agent);
+    // v5 migration: immutable directories predate generation metadata. Reconstruct
+    // their lineage once so conflict checks never need to re-diff historical trees.
+    const migrated = await Promise.all(this.store.snapshot().agents.map(async (agent) => ({ agent, generations: await this.workspaces.generationIds(agent) })));
+    await this.store.mutate((database) => {
+      for (const { agent, generations } of migrated) {
+        let parentId: string | null = null;
+        for (const id of generations) {
+          if (!database.generationRecords.some((record) => record.worldId === agent.worldId && record.id === id)) database.generationRecords.push({ id, worldId: agent.worldId, parentId, changedPaths: [], producedByAgentId: agent.id, producedByRunId: "migration", createdAt: agent.createdAt });
+          parentId = id;
+        }
+      }
+    });
     await this.workspaces.sweepStaging();
   }
 
@@ -101,10 +114,12 @@ export class AgentService {
     const id = randomUUID();
     const fields = { name: input.name.trim(), description: input.description?.trim() ?? "", instructions: input.instructions?.trim() ?? "" };
     const release = createRelease(id, fields, 1, "active", null);
+    const worldId = randomUUID();
     const agent: Agent = {
       id, ...fields,
       status: "ready",
       workspacePath: this.workspaces.workspacePath(id),
+      worldId,
       activeGenerationId: "gen_0001",
       activeReleaseId: release.id,
       candidateReleaseId: null, canaryPreviousReleaseId: null, canaryRunsRemaining: 0, canaryConsecutiveFailures: 0,
@@ -115,7 +130,7 @@ export class AgentService {
       updatedAt: timestamp,
     };
     await this.workspaces.create(agent);
-    await this.store.mutate((database) => { database.agents.push(agent); database.releases.push(release); });
+    await this.store.mutate((database) => { database.agents.push(agent); database.releases.push(release); database.worlds.push({ id: worldId, name: fields.name + " world", activeGenerationId: "gen_0001", workspacePath: agent.workspacePath, createdAt: timestamp }); database.generationRecords.push({ id: "gen_0001", worldId, parentId: null, changedPaths: [], producedByAgentId: id, producedByRunId: "bootstrap", createdAt: timestamp }); });
     return agent;
   }
 
@@ -174,11 +189,12 @@ export class AgentService {
     const id = randomUUID();
     const fields = { name: name?.trim() || sourceRelease.name + " fork", description: sourceRelease.description, instructions: sourceRelease.instructions };
     const release = createRelease(id, fields, 1, "active", null);
-    const agent: Agent = { id, ...fields, status: "ready", workspacePath: this.workspaces.workspacePath(id), activeGenerationId: "gen_0001", activeReleaseId: release.id, candidateReleaseId: null, canaryPreviousReleaseId: null, canaryRunsRemaining: 0, canaryConsecutiveFailures: 0, policy: structuredClone(source.policy), codexThreadId: null, lastError: null, createdAt: timestamp, updatedAt: timestamp };
+    const worldId = randomUUID();
+    const agent: Agent = { id, ...fields, status: "ready", workspacePath: this.workspaces.workspacePath(id), worldId, activeGenerationId: "gen_0001", activeReleaseId: release.id, candidateReleaseId: null, canaryPreviousReleaseId: null, canaryRunsRemaining: 0, canaryConsecutiveFailures: 0, policy: structuredClone(source.policy), codexThreadId: null, lastError: null, createdAt: timestamp, updatedAt: timestamp };
     await this.workspaces.create(agent);
     try { await this.workspaces.forkGeneration(sourceGenerationPath, agent); }
     catch (error) { await this.workspaces.removeStaging(agent.workspacePath); throw error; }
-    await this.store.mutate((database) => { database.agents.push(agent); database.releases.push(release); });
+    await this.store.mutate((database) => { database.agents.push(agent); database.releases.push(release); database.worlds.push({ id: worldId, name: fields.name + " world", activeGenerationId: "gen_0001", workspacePath: agent.workspacePath, createdAt: timestamp }); database.generationRecords.push({ id: "gen_0001", worldId, parentId: null, changedPaths: [], producedByAgentId: id, producedByRunId: "fork", createdAt: timestamp }); });
     return agent;
   }
 
@@ -339,6 +355,24 @@ export class AgentService {
     return this.config.runtimeProvider === "container"
       ? "container:" + this.config.containerRuntimeImage
       : "local-process:" + this.config.codexBin;
+  }
+
+  getWorld(id: string) {
+    const world = this.store.snapshot().worlds.find((item) => item.id === id);
+    if (!world) throw new HttpError(404, "World not found");
+    return world;
+  }
+
+  async attachAgentToWorld(agentId: string, worldId: string): Promise<Agent> {
+    return this.store.mutate((database) => {
+      const agent = database.agents.find((item) => item.id === agentId);
+      const world = database.worlds.find((item) => item.id === worldId);
+      if (!agent) throw new HttpError(404, "Agent not found");
+      if (!world) throw new HttpError(404, "World not found");
+      if (agent.status === "busy") throw new HttpError(409, "Stop the active run before changing worlds");
+      agent.worldId = world.id; agent.workspacePath = world.workspacePath; agent.activeGenerationId = world.activeGenerationId; agent.codexThreadId = null; agent.updatedAt = now();
+      return structuredClone(agent);
+    });
   }
 
   private hashTask(task: string): string { return createHash("sha256").update(task).digest("hex"); }
@@ -544,6 +578,12 @@ export class AgentService {
       }
       database.runs.push(run);
       database.messages.push(message);
+      const world = database.worlds.find((item) => item.id === storedAgent.worldId);
+      if (!world) throw new HttpError(409, "Agent world is missing");
+      // A peer may have committed since this Agent last ran. The next Run must stage
+      // from the world's current snapshot, never this Agent's stale cached label.
+      storedAgent.activeGenerationId = world.activeGenerationId;
+      storedAgent.workspacePath = world.workspacePath;
       const snapshot = structuredClone(storedAgent);
       storedAgent.status = "busy";
       storedAgent.lastError = null;
@@ -646,7 +686,20 @@ export class AgentService {
           return;
         }
         let nextGenerationId = agentAtStart.activeGenerationId;
-        if (!diff.isEmpty) nextGenerationId = await this.workspaces.commitStaging(agentAtStart, stagingPath);
+        if (!diff.isEmpty) {
+          const committed = await this.commitWorldRun(agentAtStart, run, stagingPath, diff);
+          if (committed.conflict) {
+            const conflict = committed.conflict;
+            const completedAt = now();
+            await this.store.mutate((database) => {
+              const storedRun = database.runs.find((item) => item.id === run.id); const storedAgent = database.agents.find((item) => item.id === agentAtStart.id);
+              if (storedRun) { storedRun.status = "failed"; storedRun.error = conflict; storedRun.gateFailures = [{ code: "CONCURRENT_WRITE_CONFLICT", reason: conflict }]; storedRun.completedAt = completedAt; }
+              if (storedAgent) { storedAgent.status = "ready"; storedAgent.lastError = null; storedAgent.updatedAt = completedAt; }
+            });
+            return;
+          }
+          nextGenerationId = committed.generationId!;
+        }
         else await this.workspaces.removeStaging(stagingPath);
         const completedAt = now();
         // Publish the sidecar evidence before exposing a completed Run. Otherwise a
@@ -711,6 +764,41 @@ export class AgentService {
       });
       if (!cancelled) await this.recordCanaryFailure(agentAtStart.id, run.id);
     }
+  }
+
+  private async commitWorldRun(agent: Agent, run: AgentRun, stagingPath: string, diff: WorkspaceDiff): Promise<{ generationId?: string; conflict?: string }> {
+    const previous = this.worldCommitQueues.get(agent.worldId) ?? Promise.resolve();
+    const execute = previous.catch(() => undefined).then(async () => {
+      const snapshot = this.store.snapshot();
+      const world = snapshot.worlds.find((item) => item.id === agent.worldId);
+      if (!world) throw new Error("Agent world is missing");
+      if (world.activeGenerationId !== agent.activeGenerationId) {
+        const records = snapshot.generationRecords.filter((item) => item.worldId === world.id);
+        const baseIndex = records.findIndex((item) => item.id === agent.activeGenerationId);
+        const advanced = baseIndex < 0 ? records : records.slice(baseIndex + 1);
+        const changed = new Set(advanced.flatMap((item) => item.changedPaths));
+        const overlap = diff.changes.map((change) => change.path).filter((filePath) => changed.has(filePath));
+        if (overlap.length > 0) {
+          const winner = advanced.find((item) => item.changedPaths.some((filePath) => overlap.includes(filePath)));
+          await this.workspaces.removeStaging(stagingPath);
+          return { conflict: "CONCURRENT_WRITE_CONFLICT: " + overlap.join(", ") + " already committed by " + (winner?.id ?? world.activeGenerationId) };
+        }
+        await this.workspaces.rebaseStaging(stagingPath, this.workspaces.generationPath(agent, world.activeGenerationId), diff);
+      }
+      const generationId = await this.workspaces.commitStaging(agent, stagingPath);
+      const createdAt = now();
+      await this.store.mutate((database) => {
+        const storedWorld = database.worlds.find((item) => item.id === agent.worldId);
+        if (!storedWorld) throw new Error("Agent world is missing");
+        const parentId = storedWorld.activeGenerationId;
+        storedWorld.activeGenerationId = generationId;
+        database.generationRecords.push({ id: generationId, worldId: storedWorld.id, parentId, changedPaths: diff.changes.map((change) => change.path), producedByAgentId: agent.id, producedByRunId: run.id, createdAt });
+        for (const peer of database.agents) if (peer.worldId === storedWorld.id) peer.activeGenerationId = generationId;
+      });
+      return { generationId };
+    });
+    this.worldCommitQueues.set(agent.worldId, execute.then(() => undefined, () => undefined));
+    return execute;
   }
 
   private async recordCanaryFailure(agentId: string, runId: string): Promise<void> {
