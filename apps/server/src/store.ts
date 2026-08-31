@@ -34,6 +34,7 @@ export class JsonStore {
         if (!releases.some((release) => release.id === activeReleaseId)) releases.push({ ...createRelease(agent.id, agent, 1, "active", null), id: activeReleaseId });
         return { ...agent, activeGenerationId: agent.activeGenerationId ?? "gen_0001", policy: agent.policy ?? defaultGatePolicy(), activeReleaseId, candidateReleaseId: agent.candidateReleaseId ?? null };
       });
+      for (const validation of legacy.validations ?? []) { validation.reviewAcknowledgement ??= null; validation.promotionAudit ??= null; }
       this.data = {
         ...parsed,
         version: 4,

@@ -6,7 +6,7 @@ export type ReleaseStatus = "active" | "candidate" | "retired";
 /** `baseline_unhealthy` means the ACTIVE release failed its own gates on this task and
  *  generation, so the candidate cannot be judged against it. Enforcement matches
  *  `blocked` — nothing is certified — but the blame is attributed correctly. */
-export type ValidationStatus = "running" | "certified" | "blocked" | "baseline_unhealthy" | "failed";
+export type ValidationStatus = "running" | "certified" | "blocked" | "baseline_unhealthy" | "review_required" | "failed";
 
 export interface GatePolicy {
   protectedPaths: string[];
@@ -116,6 +116,8 @@ export interface ValidationRecord {
   error: string | null;
   createdAt: string;
   completedAt: string | null;
+  reviewAcknowledgement: { actor: string; reason: string; acknowledgedAt: string } | null;
+  promotionAudit: { actor: string; reason: string; promotedAt: string } | null;
 }
 
 export interface FileChange {

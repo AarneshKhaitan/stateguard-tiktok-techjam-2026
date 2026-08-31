@@ -197,6 +197,7 @@ export class AgentService {
       baselineDiff: this.emptyDiff(agent.activeGenerationId), candidateDiff: this.emptyDiff(agent.activeGenerationId),
       baselineGateFailures: [], candidateGateFailures: [], differentialDeletions: [], error: null,
       createdAt: now(), completedAt: null,
+      reviewAcknowledgement: null, promotionAudit: null,
     };
     await this.store.mutate((db) => { db.validations.push(validation); const stored = db.agents.find((item) => item.id === agentId); if (stored) { stored.status = "busy"; stored.updatedAt = now(); } });
     // Fire-and-forget, exactly like sendMessage. A validation is two full Codex runs;
@@ -282,7 +283,19 @@ export class AgentService {
     return validation;
   }
 
-  async promote(id: string, validationId?: string): Promise<Agent> {
+  async acknowledgeValidation(id: string, actor: string, reason: string): Promise<ValidationRecord> {
+    if (!actor.trim() || !reason.trim()) throw new HttpError(400, "An actor and reason are required");
+    return this.store.mutate((database) => {
+      const validation = database.validations.find((item) => item.id === id);
+      if (!validation) throw new HttpError(404, "Validation not found");
+      if (validation.status !== "blocked") throw new HttpError(409, `Acknowledgement refused: validation is ${validation.status}`);
+      validation.status = "review_required";
+      validation.reviewAcknowledgement = { actor: actor.trim(), reason: reason.trim(), acknowledgedAt: now() };
+      return structuredClone(validation);
+    });
+  }
+
+  async promote(id: string, validationId?: string, actor?: string, reason?: string): Promise<Agent> {
     this.getAgent(id);
     return this.store.mutate((database) => {
       const agent = database.agents.find((item) => item.id === id);
@@ -297,7 +310,8 @@ export class AgentService {
         .filter((item) => item.agentId === id && (!validationId || item.id === validationId))
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
       if (!validation) throw new HttpError(409, "Promotion refused: no validation exists");
-      if (validation.status !== "certified") throw new HttpError(409, `Promotion refused: validation is ${validation.status}, not CERTIFIED`);
+      if (validation.status !== "certified" && validation.status !== "review_required") throw new HttpError(409, `Promotion refused: validation is ${validation.status}, not CERTIFIED`);
+      if (validation.status === "review_required" && (!validation.reviewAcknowledgement || !actor?.trim() || !reason?.trim())) throw new HttpError(409, "Promotion refused: reviewed drift requires an actor and reason");
       const active = database.releases.find((release) => release.id === agent.activeReleaseId);
       const candidate = database.releases.find((release) => release.id === validation.candidateReleaseId);
       if (!active || !candidate || agent.candidateReleaseId !== candidate.id) throw new HttpError(409, "Promotion refused: candidate release is no longer current; revalidation required");
@@ -319,6 +333,7 @@ export class AgentService {
       agent.candidateReleaseId = null;
       agent.codexThreadId = null;
       agent.name = candidate.name; agent.description = candidate.description; agent.instructions = candidate.instructions;
+      if (validation.status === "review_required") validation.promotionAudit = { actor: actor!.trim(), reason: reason!.trim(), promotedAt: now() };
       agent.updatedAt = now();
       return structuredClone(agent);
     });

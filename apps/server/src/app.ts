@@ -28,6 +28,7 @@ const policyBody = z.object({
   changeBudget: z.number().int().min(0).max(100_000),
 });
 const validationBody = z.object({ task: z.string().trim().min(1).max(50_000) });
+const reviewBody = z.object({ actor: z.string().trim().min(1).max(120), reason: z.string().trim().min(1).max(2_000) });
 
 export async function createApp(
   config: AppConfig,
@@ -122,10 +123,16 @@ export async function createApp(
     return { validation: service.getValidation(id) };
   });
 
+  app.post("/api/validations/:id/acknowledge", async (request) => {
+    const { id } = runIdParams.parse(request.params);
+    const body = reviewBody.parse(request.body);
+    return { validation: await service.acknowledgeValidation(id, body.actor, body.reason) };
+  });
+
   app.post("/api/agents/:id/promote", async (request) => {
     const { id } = agentIdParams.parse(request.params);
-    const body = z.object({ validationId: z.string().uuid().optional() }).parse(request.body ?? {});
-    return { agent: await service.promote(id, body.validationId) };
+    const body = z.object({ validationId: z.string().uuid().optional(), actor: z.string().trim().max(120).optional(), reason: z.string().trim().max(2_000).optional() }).parse(request.body ?? {});
+    return { agent: await service.promote(id, body.validationId, body.actor, body.reason) };
   });
 
   app.delete("/api/agents/:id", async (request) => {
